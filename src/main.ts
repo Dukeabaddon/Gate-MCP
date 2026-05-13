@@ -18,6 +18,7 @@ import { handleGraphQuery } from "./tools/graphQuery.js";
 import { handleMemory } from "./tools/memory.js";
 import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
+import { handleHelp } from "./tools/help.js";
 
 // ─── Server initialization ─────────────────────────────────────────────────
 
@@ -32,10 +33,7 @@ server.registerTool(
   "gate_optimize_image",
   {
     title: "Gate Optimize Image",
-    description:
-      "Compress image inputs by extracting text (OCR) or downscaling. " +
-      "Returns token savings metrics. Use intent='text' for screenshots/docs, " +
-      "'visual' for photos/diagrams, or 'auto' to auto-detect.",
+    description: "Compress images via OCR text extraction or downscaling. 76-97% savings. Use gate_help for full docs.",
     inputSchema: z.object({
       imagePath: z
         .string()
@@ -75,12 +73,7 @@ server.registerTool(
   "gate_compress_file",
   {
     title: "Gate Compress File",
-    description:
-      "Reduce file input tokens by returning AST signatures instead of full source. " +
-      "Supports JS/TS/Python via tree-sitter. " +
-      "depth='signature' (default) extracts functions/classes/imports. " +
-      "depth='summary' returns first 50 + last 20 lines + signatures. " +
-      "depth='full' returns uncompressed content.",
+    description: "AST code compression via tree-sitter. Extract signatures, discard implementation. 46-94% savings. Use gate_help for full docs.",
     inputSchema: z.object({
       filePath: z
         .string()
@@ -120,13 +113,7 @@ server.registerTool(
   "gate_graph_query",
   {
     title: "Gate Graph Query",
-    description:
-      "Query a symbol dependency graph built from your codebase using tree-sitter AST. " +
-      "Returns cross-file relationships (imports, exports, calls) in <300 tokens " +
-      "instead of reading entire files (>2,000 tokens each). " +
-      "Use queryType='stats' to see graph size, 'search' to find symbols, " +
-      "'depends_on' to trace dependencies, 'dependents' for reverse lookup, " +
-      "'file_symbols' to list symbols in a file.",
+    description: "Symbol dependency graph with BFS traversal. Find, trace, navigate code without reading files. 93-99% savings. Use gate_help for full docs.",
     inputSchema: z.object({
       query: z
         .string()
@@ -179,10 +166,7 @@ server.registerTool(
   "gate_memory",
   {
     title: "Gate Memory",
-    description:
-      "Cross-session project memory via JSON persistence. " +
-      "Store and retrieve key-value context across MCP sessions. " +
-      "Persisted to .gate-mcp/memory.json in the project root.",
+    description: "Cross-session key-value persistence to .gate-mcp/memory.json. Use gate_help for full docs.",
     inputSchema: z.object({
       action: z
         .enum(["read", "write", "delete", "list", "clear"])
@@ -226,11 +210,7 @@ server.registerTool(
   "gate_dedup_context",
   {
     title: "Gate Dedup Context",
-    description:
-      "Session-level content deduplication — our equivalent of provider prefix caching. " +
-      "Automatically integrated into gate_compress_file (files are cached on first read). " +
-      "Use action='stats' to see cache analytics, or action='clear' to reset. " +
-      "Repeated reads of unchanged files cost ~15 tokens instead of 150+.",
+    description: "Session dedup cache. Auto-integrated into gate_compress_file. Use 'stats'/'clear' to manage. Use gate_help for full docs.",
     inputSchema: z.object({
       action: z
         .enum(["check", "store", "stats", "clear"])
@@ -280,10 +260,7 @@ server.registerTool(
   "gate_clean_response",
   {
     title: "Gate Clean Response",
-    description:
-      "Compress JSON responses using TOON (Token-Optimized Object Notation). " +
-      "Arrays of objects become pipe-delimited tables (30-98% savings). " +
-      "Modes: 'toon' (tabular), 'compact' (minified JSON), 'whitelist' (keep only specified fields).",
+    description: "TOON JSON compressor. Arrays→pipe tables, 37-81% savings. Modes: toon/compact/whitelist. Use gate_help for full docs.",
     inputSchema: z.object({
       data: z.string().describe("Raw JSON string to compress"),
       format: z
@@ -316,6 +293,37 @@ server.registerTool(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error(`gate_clean_response failed: ${message}`);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool 7: gate_help ──────────────────────────────────────────────────────
+
+server.registerTool(
+  "gate_help",
+  {
+    title: "Gate Help",
+    description: "Full docs for any Gate-MCP tool. Call with tool='<name>' or omit for directory.",
+    inputSchema: z.object({
+      tool: z
+        .string()
+        .optional()
+        .describe("Tool name to get docs for, or omit for directory"),
+    }),
+  },
+  async (args) => {
+    try {
+      const result = await handleHelp({ tool: args.tool });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`gate_help failed: ${message}`);
       return {
         content: [{ type: "text", text: JSON.stringify({ error: message }) }],
         isError: true,
