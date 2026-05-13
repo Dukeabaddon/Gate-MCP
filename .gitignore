@@ -1,0 +1,34 @@
+node_modules/
+dist/
+*.js.map
+*.d.ts.map
+
+# Test artifacts
+test-image.png
+test-sample.py
+test-sample.txt
+eng.traineddata
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+.claude/
+.windsurf/
+.antigravity/
+
+# AG Kit / Agent framework (not part of gate-mcp core)
+.agent/
+protocols/
+GEMINI.md
+documentation/
+
+# Gate-MCP runtime data (user-specific)
+.gate-mcp/
+
+# Gemini/Antigravity session data
+.gemini/

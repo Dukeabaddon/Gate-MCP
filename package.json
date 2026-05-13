@@ -1,0 +1,50 @@
+{
+  "name": "gate-mcp",
+  "version": "0.2.0-alpha",
+  "description": "Context compression gateway for AI IDEs — save input tokens before they hit the API",
+  "type": "module",
+  "main": "dist/main.js",
+  "bin": {
+    "gate-mcp": "dist/main.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/main.js",
+    "test": "node dist/test.js",
+    "stress": "node dist/stress-test.js",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "token-compression",
+    "ai-tools",
+    "cursor",
+    "windsurf",
+    "claude-code",
+    "antigravity",
+    "vscode-copilot"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "gpt-tokenizer": "^2.8.1",
+    "jimp": "^1.6.0",
+    "sharp": "^0.33.5",
+    "tesseract.js": "^5.1.1",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-javascript": "^0.23.1",
+    "tree-sitter-python": "^0.23.6",
+    "tree-sitter-typescript": "^0.23.2",
+    "zod": "^3.24.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}
