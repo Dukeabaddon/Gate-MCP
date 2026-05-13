@@ -25,10 +25,15 @@ Thumbs.db
 .agent/
 protocols/
 GEMINI.md
-documentation/
 
 # Gate-MCP runtime data (user-specific)
 .gate-mcp/
 
 # Gemini/Antigravity session data
 .gemini/
+
+# Vendor (reference repos, not our source)
+vendor/
+
+# Graphify output (regenerable via `graphify update .`)
+graphify-out/
