@@ -366,12 +366,52 @@ function collectJsTsNode(node: any, type: string, result: FileSignature): void {
     result.imports.push(node.text.trim());
   }
   if (type === "export_statement" || type === "export_declaration") {
-    // Capture the full export — multi-line `export { A, B, C } from './x'`
-    // blocks carry their symbol names on continuation lines, so we must keep
-    // them. Collapse interior whitespace; cap at 4 KB which fits even huge
-    // re-export barrels (React's index.js has 50 names ≈ 1.5 KB).
-    const collapsed = node.text.trim().replace(/\s+/g, " ");
-    result.exports.push(collapsed.slice(0, 4096));
+    // The shape of an export determines how much of it to keep.
+    //
+    //   export function foo() { 200 lines of body... }
+    //     -> just record "export function foo(args)". The body is already
+    //        captured by the function_declaration child via Functions section.
+    //        Duplicating the full body in Exports adds enormous token cost.
+    //
+    //   export class Foo { ... }
+    //   export interface Foo { ... }
+    //     -> just record the class/interface header line.
+    //
+    //   export { A, B, C } from './x'
+    //     -> keep the full block (the symbol names are the value).
+    //
+    //   export type X = ...
+    //   export default <expression>
+    //   export const X = ...
+    //     -> keep full text (usually short).
+    //
+    // Decision: peek at the wrapped declaration's type.
+    let wrapped: any = null;
+    for (let i = 0; i < node.childCount; i++) {
+      const c = node.child(i);
+      const ct = c.type;
+      if (
+        ct === "function_declaration" ||
+        ct === "class_declaration" ||
+        ct === "interface_declaration" ||
+        ct === "generator_function_declaration"
+      ) {
+        wrapped = c;
+        break;
+      }
+    }
+
+    if (wrapped) {
+      // Body-wrapping declaration — record just the export-prefixed
+      // signature, not the body.
+      const firstLine = node.text.split("\n")[0].trim();
+      result.exports.push(firstLine.slice(0, 400));
+    } else {
+      // Re-export block, type alias, default expression, or lexical
+      // declaration — keep the full text so symbol names survive.
+      const collapsed = node.text.trim().replace(/\s+/g, " ");
+      result.exports.push(collapsed.slice(0, 4096));
+    }
   }
   if (
     type === "function_declaration" ||
