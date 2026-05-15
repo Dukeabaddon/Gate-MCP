@@ -180,7 +180,10 @@ export function extractSignatures(
   }
 
   try {
-    const tree = parser.parse(source);
+    // tree-sitter's Node binding has a ~32KB string buffer; large source strings
+    // throw "Invalid argument". The callback variant streams chunks and works
+    // for files of any size. Always use it for correctness.
+    const tree = parseWithCallback(parser, source);
     const root = tree.rootNode;
     const result: FileSignature = { imports: [], exports: [], functions: [], classes: [] };
     traverseNode(root, language, result);
@@ -189,6 +192,26 @@ export function extractSignatures(
     logger.warn(`AST parsing failed for ${language}, falling back to regex: ${err}`);
     return extractSignaturesRegex(source, language);
   }
+}
+
+/**
+ * Parse a source string via tree-sitter's chunk-callback API.
+ *
+ * The default `parser.parse(string)` path in tree-sitter ^0.21 has an internal
+ * ~32 KB string buffer and throws "Invalid argument" on larger files. The
+ * callback variant streams the source in fixed-size slices and bypasses
+ * that cap. Chunks must stay strictly below the buffer limit.
+ *
+ * Chunk size 4 KB: small enough to never trigger the limit, large enough
+ * that overhead is negligible (50 callbacks for a 200 KB file).
+ */
+function parseWithCallback(parser: any, source: string): any {
+  const CHUNK = 4096;
+  const len = source.length;
+  return parser.parse((index: number, _pos: any) => {
+    if (index >= len) return "";
+    return source.slice(index, Math.min(index + CHUNK, len));
+  });
 }
 
 function traverseNode(
