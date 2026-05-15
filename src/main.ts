@@ -20,12 +20,13 @@ import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
 import { handleHelp } from "./tools/help.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
+import { closeCacheDb } from "./lib/cacheDb.js";
 
 // ─── Server initialization ─────────────────────────────────────────────────
 
 const server = new McpServer({
   name: "gatemcp",
-  version: "0.3.1",
+  version: "0.4.0",
 });
 
 // ─── Tool 1: gate_optimize_image ────────────────────────────────────────────
@@ -345,6 +346,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   } catch (err) {
     logger.warn(`OCR cleanup failed during shutdown: ${err}`);
   }
+  try {
+    closeCacheDb();
+  } catch (err) {
+    logger.warn(`Cache DB cleanup failed during shutdown: ${err}`);
+  }
   process.exit(0);
 }
 
@@ -355,7 +361,7 @@ process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Starting gatemcp server v0.3.2...");
+  logger.info("Starting gatemcp server v0.4.0...");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

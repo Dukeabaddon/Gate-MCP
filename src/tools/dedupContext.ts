@@ -1,24 +1,39 @@
 /**
- * Gate Dedup Context — Session-Level Content Deduplication
+ * Gate Dedup Context — Cross-Session Content Deduplication (v0.4.0)
  *
- * Achieves ~93% savings on repeated file/image reads within a session.
- * This is our equivalent of "provider prefix caching" but at the MCP tool layer.
+ * Achieves ~93% savings on repeated file/image reads. The cache is backed by
+ * SQLite (via better-sqlite3) and persists across MCP server restarts and
+ * across concurrent IDE sessions. When better-sqlite3 is unavailable, the
+ * cache transparently degrades to an in-memory Map with identical API.
  *
  * How it works:
- * - First read: compress normally, cache the result with a content hash
- * - Subsequent reads: detect unchanged content via hash, return a 10-token stub
- * - File modified: detect hash mismatch, re-compress, update cache
+ * - First read: compress normally, persist the compressed content + SHA-256.
+ * - Subsequent reads: detect unchanged content via hash, return a stub.
+ * - File modified: detect hash mismatch, drop the row, re-compress, re-store.
  *
- * The MCP server runs as a persistent process per IDE session,
- * so in-memory state survives across tool calls within the same session.
+ * See src/lib/cacheDb.ts for the backing store and LRU eviction rules.
  */
 
 import fs from "node:fs";
 import crypto from "node:crypto";
 import logger from "../lib/logger.js";
 import { countTextTokens } from "../lib/tokenCounter.js";
+import {
+  getEntry,
+  putEntry,
+  recordHit,
+  deleteEntry,
+  clearAll,
+  getStats,
+  isPersistent,
+  type CacheEntryRow,
+} from "../lib/cacheDb.js";
 
-interface CacheEntry {
+/**
+ * Backwards-compatible CacheEntry shape returned to the rest of the codebase.
+ * `timestamp` mirrors the row's updatedAt so existing callers keep working.
+ */
+export interface CacheEntry {
   hash: string;
   content: string;
   tokens: number;
@@ -52,16 +67,22 @@ interface DedupResult {
   }>;
 }
 
-// ─── In-Memory Session Cache ────────────────────────────────────────────────
-// This Map persists for the lifetime of the MCP server process.
-// It resets when the IDE restarts the server.
-
-const sessionCache = new Map<string, CacheEntry>();
-let totalTokensSaved = 0;
-
 function computeFileHash(filePath: string): string {
   const content = fs.readFileSync(filePath);
   return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+function toLegacyEntry(row: CacheEntryRow): CacheEntry {
+  return {
+    hash: row.hash,
+    content: row.content,
+    tokens: row.tokens,
+    originalTokens: row.originalTokens,
+    timestamp: row.updatedAt,
+    hitCount: row.hitCount,
+    filePath: row.filePath,
+    type: row.type,
+  };
 }
 
 // ─── Handler ────────────────────────────────────────────────────────────────
@@ -75,32 +96,23 @@ export async function handleDedupContext(args: {
 }): Promise<DedupResult> {
   const { action } = args;
 
-  // ── Stats: return cache analytics ──
+  // ── Stats: aggregate cache analytics from the backing store ──
   if (action === "stats") {
-    const entries = Array.from(sessionCache.values()).map((e) => ({
-      filePath: e.filePath,
-      hitCount: e.hitCount,
-      tokensSaved: e.hitCount * (e.originalTokens - e.tokens),
-      lastAccess: new Date(e.timestamp).toISOString(),
-    }));
-
-    const totalHits = entries.reduce((sum, e) => sum + e.hitCount, 0);
-
+    const stats = getStats();
+    const backend = isPersistent() ? "SQLite" : "memory";
     return {
       status: "cache_stats",
-      totalEntries: sessionCache.size,
-      totalHits,
-      totalTokensSaved,
-      entries,
-      note: `Session cache: ${sessionCache.size} entries, ${totalHits} hits, ${totalTokensSaved} tokens saved.`,
+      totalEntries: stats.totalEntries,
+      totalHits: stats.totalHits,
+      totalTokensSaved: stats.totalTokensSaved,
+      entries: stats.entries,
+      note: `${backend} cache: ${stats.totalEntries} entries, ${stats.totalHits} hits, ${stats.totalTokensSaved} tokens saved.`,
     };
   }
 
-  // ── Clear: reset cache ──
+  // ── Clear: wipe all entries ──
   if (action === "clear") {
-    const size = sessionCache.size;
-    sessionCache.clear();
-    totalTokensSaved = 0;
+    const size = clearAll();
     logger.info(`Session cache cleared (${size} entries removed)`);
     return {
       status: "cache_stats",
@@ -121,24 +133,19 @@ export async function handleDedupContext(args: {
     }
 
     const currentHash = computeFileHash(absPath);
-    const cached = sessionCache.get(absPath);
+    const cached = getEntry(absPath);
 
     if (cached && cached.hash === currentHash) {
       // Cache HIT — file unchanged since last read
-      cached.hitCount++;
-      cached.timestamp = Date.now();
-      const savedThisHit = cached.originalTokens - cached.tokens;
-      totalTokensSaved += savedThisHit;
+      const updated = recordHit(absPath) ?? cached;
+      const savedThisHit = updated.originalTokens - updated.tokens;
 
       logger.info(
-        `Cache HIT: ${absPath} (hit #${cached.hitCount}, saved ${savedThisHit} tokens)`
+        `Cache HIT: ${absPath} (hit #${updated.hitCount}, saved ${savedThisHit} tokens)`
       );
 
-      // Return the stub — this is where the magic happens.
-      // Instead of re-sending 150+ tokens of compressed content,
-      // we send ~15 tokens of cache reference.
       const stubTokens = countTextTokens(
-        `[cached] ${cached.filePath} unchanged. ${cached.tokens} tokens.`
+        `[cached] ${updated.filePath} unchanged. ${updated.tokens} tokens.`
       );
 
       return {
@@ -146,14 +153,15 @@ export async function handleDedupContext(args: {
         filePath: absPath,
         hash: currentHash,
         cached: true,
-        hitCount: cached.hitCount,
-        originalTokens: cached.originalTokens,
+        hitCount: updated.hitCount,
+        originalTokens: updated.originalTokens,
         dedupTokens: stubTokens,
         savingsPercent: Math.round(
-          ((cached.originalTokens - stubTokens) / cached.originalTokens) * 100
+          ((updated.originalTokens - stubTokens) / Math.max(updated.originalTokens, 1)) *
+            100
         ),
-        content: cached.content,
-        note: `Cache hit #${cached.hitCount}. File unchanged (hash: ${currentHash}). Returning cached content. Saved ${savedThisHit} tokens this hit.`,
+        content: updated.content,
+        note: `Cache hit #${updated.hitCount}. File unchanged (hash: ${currentHash}). Returning cached content. Saved ${savedThisHit} tokens this hit.`,
       };
     }
 
@@ -162,7 +170,7 @@ export async function handleDedupContext(args: {
       logger.info(
         `Cache STALE: ${absPath} (old hash: ${cached.hash}, new: ${currentHash})`
       );
-      sessionCache.delete(absPath);
+      deleteEntry(absPath);
       return {
         status: "cache_update",
         filePath: absPath,
@@ -172,17 +180,16 @@ export async function handleDedupContext(args: {
       };
     }
 
-    // Cache MISS — never seen this file
     return {
       status: "cache_miss",
       filePath: absPath,
       hash: currentHash,
       cached: false,
-      note: `File not in session cache. Read with gate_compress_file, then store with gate_dedup_context(action: "store").`,
+      note: `File not in cache. Read with gate_compress_file, then store with gate_dedup_context(action: "store").`,
     };
   }
 
-  // ── Store: add compressed content to cache ──
+  // ── Store: persist compressed content ──
   if (action === "store") {
     if (!args.filePath) throw new Error("filePath required for 'store' action");
     if (!args.content) throw new Error("content required for 'store' action");
@@ -192,20 +199,16 @@ export async function handleDedupContext(args: {
     const tokens = countTextTokens(args.content);
     const originalTokens = args.originalTokens ?? tokens;
 
-    sessionCache.set(absPath, {
+    putEntry({
+      filePath: absPath,
       hash,
       content: args.content,
       tokens,
       originalTokens,
-      timestamp: Date.now(),
-      hitCount: 0,
-      filePath: absPath,
       type: args.type ?? "file",
     });
 
-    logger.info(
-      `Cached: ${absPath} (${tokens} tokens, hash: ${hash})`
-    );
+    logger.info(`Cached: ${absPath} (${tokens} tokens, hash: ${hash})`);
 
     return {
       status: "cache_miss",
@@ -215,7 +218,7 @@ export async function handleDedupContext(args: {
       originalTokens,
       dedupTokens: tokens,
       savingsPercent: 0,
-      note: `Stored in session cache. Future reads of this unchanged file will cost ~15 tokens instead of ${tokens}.`,
+      note: `Stored in ${isPersistent() ? "persistent" : "in-memory"} cache. Future reads of this unchanged file will cost ~15 tokens instead of ${tokens}.`,
     };
   }
 
@@ -229,24 +232,22 @@ export async function handleDedupContext(args: {
 export function checkCache(filePath: string): CacheEntry | null {
   try {
     const absPath = fs.realpathSync(filePath);
-    const cached = sessionCache.get(absPath);
+    const cached = getEntry(absPath);
     if (!cached) return null;
 
     const currentHash = computeFileHash(absPath);
     if (cached.hash !== currentHash) {
-      sessionCache.delete(absPath);
+      deleteEntry(absPath);
       return null;
     }
 
-    cached.hitCount++;
-    cached.timestamp = Date.now();
-    const saved = cached.originalTokens - cached.tokens;
-    totalTokensSaved += saved;
+    const updated = recordHit(absPath) ?? cached;
+    const saved = updated.originalTokens - updated.tokens;
 
     logger.info(
-      `Auto-cache HIT: ${absPath} (hit #${cached.hitCount}, saved ${saved} tokens)`
+      `Auto-cache HIT: ${absPath} (hit #${updated.hitCount}, saved ${saved} tokens)`
     );
-    return cached;
+    return toLegacyEntry(updated);
   } catch {
     return null;
   }
@@ -263,14 +264,12 @@ export function storeInCache(
     const hash = computeFileHash(absPath);
     const tokens = countTextTokens(content);
 
-    sessionCache.set(absPath, {
+    putEntry({
+      filePath: absPath,
       hash,
       content,
       tokens,
       originalTokens,
-      timestamp: Date.now(),
-      hitCount: 0,
-      filePath: absPath,
       type,
     });
 
@@ -279,4 +278,4 @@ export function storeInCache(
     logger.warn(`Failed to cache ${filePath}: ${err}`);
   }
 }
-// Last reviewed: 2026-05-15 — verified against v0.3.2 fidelity test suite.
+// Last reviewed: 2026-05-15 — v0.4.0 persistent SQLite migration.
