@@ -166,6 +166,47 @@ function getParser(language: SupportedLanguage): any | null {
 }
 
 /**
+ * Detect Facebook Flow source files via the `@flow` pragma.
+ *
+ * Flow shares ~95% of its syntax with TypeScript (generics, type imports,
+ * type annotations, optional chains, etc.). tree-sitter-javascript chokes on
+ * Flow type annotations and silently emits `ERROR` nodes that hide the entire
+ * surrounding declaration from our signature collectors.
+ *
+ * The fix is to detect Flow's `@flow` / `@noflow` pragma in the file header
+ * and route those files to tree-sitter-typescript, which parses them with a
+ * negligible error count and recovers full export coverage.
+ *
+ * We scan the first 4 KB. Most files put the pragma in the first 1 KB, but
+ * Meta's source files often have lengthy MIT/Apache license headers that
+ * push the @flow pragma past line 30 (e.g. react-dom-bindings escape util).
+ * 4 KB covers every observed case while staying effectively free per file.
+ */
+const FLOW_PRAGMA_RE = /@(?:no)?flow\b/;
+export function detectFlowFile(source: string): boolean {
+  return FLOW_PRAGMA_RE.test(source.slice(0, 4096));
+}
+
+/**
+ * Pick the tree-sitter language to use for a file.
+ *
+ * Most languages map 1:1 to their grammar, but a .js file may actually be
+ * Flow-typed (see detectFlowFile). For those, return `tsx` — the TypeScript
+ * TSX grammar is a strict superset of plain TS that also parses JSX, which
+ * Flow files frequently contain (React component files are .js + @flow + JSX).
+ * The plain TypeScript grammar fails on JSX with cascading ERROR nodes.
+ */
+function pickGrammarLanguage(
+  language: SupportedLanguage,
+  source: string
+): SupportedLanguage {
+  if (language === "javascript" && detectFlowFile(source)) {
+    return "tsx";
+  }
+  return language;
+}
+
+/**
  * Extract structural signatures from source code using tree-sitter AST.
  * Falls back to regex extraction when no native parser is available.
  */
@@ -173,7 +214,11 @@ export function extractSignatures(
   source: string,
   language: SupportedLanguage
 ): FileSignature {
-  const parser = getParser(language);
+  // Route Flow-typed .js files through the TypeScript grammar (see
+  // pickGrammarLanguage doc-comment). JS/TS share collector logic so the
+  // downstream traverseNode call still receives "javascript".
+  const grammarLang = pickGrammarLanguage(language, source);
+  const parser = getParser(grammarLang);
 
   if (!parser) {
     return extractSignaturesRegex(source, language);
@@ -185,12 +230,64 @@ export function extractSignatures(
     // for files of any size. Always use it for correctness.
     const tree = parseWithCallback(parser, source);
     const root = tree.rootNode;
+
+    // Adversarial-review guard (FAIROS Principle 4):
+    //   When the AST root itself is an ERROR node, the grammar gave up on the
+    //   file. Inside an ERROR tree, error recovery can emit junk
+    //   `function_declaration` nodes — e.g. `if (...)`, `then(...)`, etc. —
+    //   that our extractor cannot distinguish from real declarations. The
+    //   resulting compressed view is worse than the regex fallback because it
+    //   loses real exports AND adds false ones. Reject the AST output here.
+    if (root.type === "ERROR") {
+      logger.warn(
+        `AST root is ERROR for ${language} (${source.length} bytes); using regex fallback`
+      );
+      return extractSignaturesRegex(source, language);
+    }
+
     const result: FileSignature = { imports: [], exports: [], functions: [], classes: [] };
-    traverseNode(root, language, result);
+    // Traverse using the collector for the SOURCE language, not the grammar
+    // language — Flow files should look like "javascript" to consumers.
+    traverseNode(root, language === "javascript" ? "javascript" : language, result);
+
+    // ESM-only AST collectors miss CommonJS export forms — `module.exports.X = ...`
+    // and `exports.X = ...` get parsed as assignment_expressions with no
+    // semantic export status. React's npm shim files are 100% CJS. Augment.
+    if (language === "javascript" || language === "typescript" || language === "tsx") {
+      augmentWithCjsExports(source, result);
+    }
+
     return result;
   } catch (err) {
     logger.warn(`AST parsing failed for ${language}, falling back to regex: ${err}`);
     return extractSignaturesRegex(source, language);
+  }
+}
+
+/**
+ * Supplement AST-extracted exports with CommonJS patterns.
+ *
+ * tree-sitter-javascript and tree-sitter-typescript do not classify
+ * `exports.foo = bar` or `module.exports.foo = bar` as export nodes — they
+ * are plain assignment expressions. For files that use CJS exclusively
+ * (npm distribution shims, jest test helpers, transpiled output) this
+ * means the AST extractor returns no exports at all.
+ *
+ * This pass scans the raw source for the two CJS forms and appends them
+ * to result.exports. Duplicate names are harmless; the compressed view
+ * just contains the symbol once or twice.
+ */
+const CJS_EXPORT_RE = /^[\t ]*(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/gm;
+const CJS_DEFAULT_RE = /^[\t ]*module\.exports\s*=/m;
+
+function augmentWithCjsExports(source: string, result: FileSignature): void {
+  let m: RegExpExecArray | null;
+  CJS_EXPORT_RE.lastIndex = 0;
+  while ((m = CJS_EXPORT_RE.exec(source)) !== null) {
+    result.exports.push(`exports.${m[1]} = ...`);
+  }
+  if (CJS_DEFAULT_RE.test(source)) {
+    result.exports.push("module.exports = ...");
   }
 }
 
@@ -269,7 +366,12 @@ function collectJsTsNode(node: any, type: string, result: FileSignature): void {
     result.imports.push(node.text.trim());
   }
   if (type === "export_statement" || type === "export_declaration") {
-    result.exports.push(node.text.trim().split("\n")[0]);
+    // Capture the full export — multi-line `export { A, B, C } from './x'`
+    // blocks carry their symbol names on continuation lines, so we must keep
+    // them. Collapse interior whitespace; cap at 4 KB which fits even huge
+    // re-export barrels (React's index.js has 50 names ≈ 1.5 KB).
+    const collapsed = node.text.trim().replace(/\s+/g, " ");
+    result.exports.push(collapsed.slice(0, 4096));
   }
   if (
     type === "function_declaration" ||
@@ -510,9 +612,14 @@ function extractSignaturesRegex(
       imports.push(trimmed.slice(0, 200));
     }
 
-    // Generic exports
+    // Generic exports (ESM + CJS)
     if (/^export\s/.test(trimmed) || /^module\.exports/.test(trimmed)) {
       exports.push(trimmed.split("{")[0].trim().slice(0, 200));
+    }
+    // CJS named exports: `exports.foo = ...` (without preceding module.)
+    const cjsMatch = trimmed.match(/^exports\.([A-Za-z_$][\w$]*)\s*=/);
+    if (cjsMatch) {
+      exports.push(`exports.${cjsMatch[1]} = ...`);
     }
 
     // Functions across languages

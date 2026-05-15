@@ -355,7 +355,7 @@ process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Starting gatemcp server v0.3.1...");
+  logger.info("Starting gatemcp server v0.3.2...");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
