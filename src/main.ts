@@ -25,7 +25,7 @@ import { terminateOcr } from "./lib/imageProcessor.js";
 
 const server = new McpServer({
   name: "gatemcp",
-  version: "0.3.0",
+  version: "0.3.1",
 });
 
 // ─── Tool 1: gate_optimize_image ────────────────────────────────────────────
@@ -355,7 +355,7 @@ process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Starting gatemcp server v0.3.0...");
+  logger.info("Starting gatemcp server v0.3.1...");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
