@@ -38,4 +38,8 @@ vendor/
 # Graphify output (regenerable via `graphify update .`)
 graphify-out/
 
-# Last reviewed: 2026-05-15 — ignore patterns audited against v0.3.2 layout.
+# Internal docs — kept locally, not published to the public repo
+docs/
+documentation/
+
+# Last reviewed: 2026-05-16 — docs/ and documentation/ excluded from public repo.
