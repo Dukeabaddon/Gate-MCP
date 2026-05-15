@@ -54,7 +54,32 @@ export interface CompressFileInput {
   depth?: CompressionDepth;
 }
 
-export type SupportedLanguage = "javascript" | "typescript" | "python" | "unknown";
+export type SupportedLanguage =
+  | "javascript"
+  | "typescript"
+  | "tsx"
+  | "python"
+  | "java"
+  | "csharp"
+  | "cpp"
+  | "c"
+  | "go"
+  | "rust"
+  | "ruby"
+  | "php"
+  | "kotlin"
+  | "swift"
+  | "scala"
+  | "html"
+  | "css"
+  | "json"
+  | "yaml"
+  | "sql"
+  | "bash"
+  | "vue"
+  | "svelte"
+  | "markdown"
+  | "unknown";
 
 export interface FileSignature {
   imports: string[];

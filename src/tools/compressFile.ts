@@ -6,13 +6,13 @@
  */
 
 import fs from "node:fs";
-import path from "node:path";
 import {
   detectLanguage,
   extractSignatures,
   formatSignature,
 } from "../lib/astParser.js";
 import { countTextTokens, calculateSavings } from "../lib/tokenCounter.js";
+import { safeResolveExistingFile } from "../lib/pathGuard.js";
 import logger from "../lib/logger.js";
 import type { CompressionDepth, CompressFileResult } from "../types.js";
 import { checkCache, storeInCache } from "./dedupContext.js";
@@ -23,19 +23,10 @@ export async function handleCompressFile(args: {
 }): Promise<CompressFileResult> {
   const { depth = "signature" } = args;
 
-  // 1. Resolve and validate path
-  const filePath = path.isAbsolute(args.filePath)
-    ? args.filePath
-    : path.resolve(process.cwd(), args.filePath);
-
-  if (!fs.existsSync(filePath)) {
-    throw new Error(`File not found: ${filePath}`);
-  }
-
-  const stat = fs.statSync(filePath);
-  if (stat.isDirectory()) {
-    throw new Error(`Path is a directory, not a file: ${filePath}`);
-  }
+  // 1. Resolve, sanitize, and verify the path (boundary check, anti-traversal)
+  const filePath = safeResolveExistingFile(args.filePath, {
+    caller: "gate_compress_file",
+  });
 
   logger.info(`Compressing file: ${filePath} (depth=${depth})`);
 
