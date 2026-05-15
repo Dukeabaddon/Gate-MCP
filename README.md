@@ -13,6 +13,8 @@
   </p>
 </p>
 
+> **Note (v0.3.1):** P1 hotfix — tree-sitter's Node binding has a ~32 KB string-buffer limit that silently degraded all JS/TS files >32 KB to regex fallback. Fixed via chunk-callback parsing. Verified on the full Facebook React monorepo (2,080 files, 3.93M → 306k tokens, **92% reduction**) with zero AST failures.
+>
 > **Note (v0.3.0):** This project was originally named `gate-mcp`. That npm name was claimed by Gate.io's crypto-trading MCP server. The package was renamed to **`gatemcp`** to avoid the collision.
 
 ---
@@ -134,6 +136,16 @@ Sensitive paths (`~/.ssh`, `~/.aws/credentials`, `/etc/passwd`, etc) are blocked
 | **Scale** | VSCode source (6,115 TS files) | 3.2s build, 8ms queries, 25MB RAM |
 | **Semantic Quality** | API surface retention after AST compression | **100%** (21/21 exports, 49/49 imports) |
 | **TOON Fidelity** | Parse compressed data back to original | **100%** (17/17 fields, 15/15 values) |
+| **React monorepo** (v0.3.1) | `facebook/react` `packages/` — 2,080 files, 3.93M tokens | **92% reduction → 306k tokens** ($10.87 saved per Claude Sonnet 4 query) |
+| **React DOM** (v0.3.1) | `react-dom/src` — 185 files, 786k tokens | **96% reduction → 30k tokens** |
+| **React Reconciler** (v0.3.1) | `react-reconciler/src` — 165 files, 793k tokens | **92% reduction → 62k tokens** |
+
+Reproduce the React benchmarks with:
+
+```bash
+git clone --depth 1 https://github.com/facebook/react ~/demo/react
+node dist/scripts/benchmark-real-repo.js ~/demo/react/packages --out report.md
+```
 
 ### Per-Turn Token Savings
 
