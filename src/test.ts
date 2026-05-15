@@ -14,6 +14,7 @@ import { handleMemory } from "./tools/memory.js";
 import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
+import { closeCacheDb, isPersistent } from "./lib/cacheDb.js";
 
 const DIVIDER = "═".repeat(60);
 const PASS = "✅";
@@ -308,6 +309,156 @@ async function runTests(): Promise<void> {
     failed++;
   }
 
+  // ── Test 14: dedup cache — store → check increments hit_count ──
+  console.error(`\n${INFO} Test 14: dedup cache (store → check increments hit_count)`);
+  try {
+    const backend = isPersistent() ? "SQLite" : "in-memory";
+    console.error(`  ${INFO} Cache backend: ${backend}`);
+    await handleDedupContext({ action: "clear" });
+
+    const target = path.resolve(process.cwd(), "src/types.ts");
+    const storeResult = await handleDedupContext({
+      action: "store",
+      filePath: target,
+      content: "/* compressed stub */",
+      originalTokens: 500,
+      type: "file",
+    });
+    if (!storeResult.cached) throw new Error("store did not report cached=true");
+
+    const firstCheck = await handleDedupContext({ action: "check", filePath: target });
+    if (firstCheck.status !== "cache_hit") {
+      throw new Error(`expected cache_hit, got ${firstCheck.status}`);
+    }
+    if (firstCheck.hitCount !== 1) {
+      throw new Error(`expected hitCount=1, got ${firstCheck.hitCount}`);
+    }
+    const secondCheck = await handleDedupContext({ action: "check", filePath: target });
+    if (secondCheck.hitCount !== 2) {
+      throw new Error(`expected hitCount=2, got ${secondCheck.hitCount}`);
+    }
+    if (typeof secondCheck.dedupTokens !== "number" || secondCheck.dedupTokens <= 0) {
+      throw new Error("dedupTokens missing on cache_hit");
+    }
+    console.error(`  ${PASS} store → check #1 → check #2 returned hitCount 1, then 2`);
+    console.error(`  ${PASS} response shape preserved (status/filePath/hash/dedupTokens)`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 15: dedup cache — file mutation triggers cache_update ──
+  console.error(`\n${INFO} Test 15: dedup cache (file mutation → cache_update)`);
+  try {
+    await handleDedupContext({ action: "clear" });
+    const tmp = path.resolve(process.cwd(), "test-dedup-sample.ts");
+    fs.writeFileSync(tmp, "export const A = 1;\n");
+    try {
+      await handleDedupContext({
+        action: "store",
+        filePath: tmp,
+        content: "// stub v1",
+        originalTokens: 100,
+      });
+
+      const hit = await handleDedupContext({ action: "check", filePath: tmp });
+      if (hit.status !== "cache_hit") {
+        throw new Error(`expected cache_hit before mutation, got ${hit.status}`);
+      }
+
+      fs.writeFileSync(tmp, "export const A = 1;\nexport const B = 2;\n");
+      const stale = await handleDedupContext({ action: "check", filePath: tmp });
+      if (stale.status !== "cache_update") {
+        throw new Error(`expected cache_update after mutation, got ${stale.status}`);
+      }
+      console.error(`  ${PASS} Mutation correctly invalidated cache (status=cache_update)`);
+
+      const miss = await handleDedupContext({ action: "check", filePath: tmp });
+      if (miss.status !== "cache_miss") {
+        throw new Error(`expected cache_miss after invalidation, got ${miss.status}`);
+      }
+      console.error(`  ${PASS} Subsequent check returns cache_miss until re-stored`);
+      passed++;
+    } finally {
+      try { fs.unlinkSync(tmp); } catch {}
+    }
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 16: dedup cache — stats consistency ──
+  console.error(`\n${INFO} Test 16: dedup cache (stats consistency)`);
+  try {
+    await handleDedupContext({ action: "clear" });
+    const f1 = path.resolve(process.cwd(), "src/types.ts");
+    const f2 = path.resolve(process.cwd(), "src/lib/logger.ts");
+    await handleDedupContext({
+      action: "store", filePath: f1, content: "stub-1", originalTokens: 800,
+    });
+    await handleDedupContext({
+      action: "store", filePath: f2, content: "stub-2", originalTokens: 400,
+    });
+    await handleDedupContext({ action: "check", filePath: f1 });
+    await handleDedupContext({ action: "check", filePath: f1 });
+    await handleDedupContext({ action: "check", filePath: f2 });
+
+    const stats = await handleDedupContext({ action: "stats" });
+    if (stats.totalEntries !== 2) {
+      throw new Error(`expected totalEntries=2, got ${stats.totalEntries}`);
+    }
+    if (stats.totalHits !== 3) {
+      throw new Error(`expected totalHits=3, got ${stats.totalHits}`);
+    }
+    const expectedHitsFromEntries = (stats.entries ?? []).reduce(
+      (sum, e) => sum + e.hitCount, 0
+    );
+    if (expectedHitsFromEntries !== stats.totalHits) {
+      throw new Error(`per-entry hitCount sum != totalHits (${expectedHitsFromEntries} vs ${stats.totalHits})`);
+    }
+    if ((stats.totalTokensSaved ?? -1) < 0) {
+      throw new Error("totalTokensSaved missing or negative");
+    }
+    console.error(`  ${PASS} totalEntries=${stats.totalEntries}, totalHits=${stats.totalHits}, totalTokensSaved=${stats.totalTokensSaved}`);
+    console.error(`  ${PASS} Per-entry hitCount sums match aggregate`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 17: dedup cache — clear wipes entries ──
+  console.error(`\n${INFO} Test 17: dedup cache (clear wipes entries)`);
+  try {
+    const f1 = path.resolve(process.cwd(), "src/types.ts");
+    await handleDedupContext({
+      action: "store", filePath: f1, content: "stub-clear", originalTokens: 800,
+    });
+    const before = await handleDedupContext({ action: "stats" });
+    if ((before.totalEntries ?? 0) < 1) {
+      throw new Error(`expected at least 1 entry before clear, got ${before.totalEntries}`);
+    }
+
+    await handleDedupContext({ action: "clear" });
+    const after = await handleDedupContext({ action: "stats" });
+    if (after.totalEntries !== 0) {
+      throw new Error(`expected 0 entries after clear, got ${after.totalEntries}`);
+    }
+    if (after.totalHits !== 0) {
+      throw new Error(`expected totalHits=0 after clear, got ${after.totalHits}`);
+    }
+    if (after.totalTokensSaved !== 0) {
+      throw new Error(`expected totalTokensSaved=0 after clear, got ${after.totalTokensSaved}`);
+    }
+    console.error(`  ${PASS} Pre-clear entries: ${before.totalEntries}, post-clear: 0`);
+    console.error(`  ${PASS} totalHits and totalTokensSaved both reset to 0`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
   // ── Test 8: gate_optimize_image (skip if no test image) ──
   console.error(`\n${INFO} Test 8: gate_optimize_image`);
   const testImagePaths = [
@@ -344,8 +495,9 @@ async function runTests(): Promise<void> {
   console.error(`  Results: ${passed} passed, ${failed} failed`);
   console.error(DIVIDER);
 
-  // Cleanup OCR worker
+  // Cleanup OCR worker + cache DB
   await terminateOcr();
+  closeCacheDb();
 
   if (failed > 0) {
     process.exit(1);

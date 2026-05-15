@@ -1,5 +1,5 @@
 /**
- * gatemcp v0.3.2 — Real-repo compression benchmark.
+ * gatemcp v0.4.0 — Real-repo compression benchmark.
  *
  * Measures the input-token cost of feeding every code file in a directory
  * to an LLM, with and without gatemcp's signature compression.
@@ -202,7 +202,7 @@ function buildReport(
   lines.push(`**Target:** \`${target}\``);
   lines.push(`**Files scanned:** ${totalFiles}`);
   lines.push(`**Wall time:** ${durationMs.toFixed(0)} ms (${(totalFiles / (durationMs / 1000)).toFixed(0)} files/sec)`);
-  lines.push(`**gatemcp version:** 0.3.2`);
+  lines.push(`**gatemcp version:** 0.4.0`);
   lines.push("");
   lines.push(`## Overall savings`);
   lines.push("");

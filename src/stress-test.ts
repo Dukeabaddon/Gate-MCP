@@ -9,7 +9,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { handleOptimizeImage } from "./tools/optimizeImage.js";
 import { handleCompressFile } from "./tools/compressFile.js";
+import { handleDedupContext } from "./tools/dedupContext.js";
+import { checkCache, storeInCache } from "./tools/dedupContext.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
+import { closeCacheDb, isPersistent } from "./lib/cacheDb.js";
 
 const DIVIDER = "═".repeat(60);
 const PASS = "✅";
@@ -198,10 +201,80 @@ if __name__ == "__main__":
     }
   });
 
+  // ── Stress Test 10: persistent cache — 1,000 stores + 10,000 checks ──
+  console.error(`\n${INFO} Stress Test 10: persistent dedup cache (1k stores + 10k checks)`);
+  const tmpCacheDir = path.resolve(process.cwd(), ".tmp-cache-stress");
+  try {
+    fs.mkdirSync(tmpCacheDir, { recursive: true });
+    await handleDedupContext({ action: "clear" });
+    console.error(`  ${INFO} Cache backend: ${isPersistent() ? "SQLite" : "in-memory Map"}`);
+
+    const N_STORE = 1000;
+    const N_CHECK = 10000;
+    const HIT_RATIO = 0.8;
+
+    const files: string[] = [];
+    for (let i = 0; i < N_STORE; i++) {
+      const f = path.join(tmpCacheDir, `file-${i}.txt`);
+      fs.writeFileSync(f, `payload-${i}-${"x".repeat(64)}\n`);
+      files.push(f);
+    }
+
+    const storeStart = Date.now();
+    for (let i = 0; i < N_STORE; i++) {
+      storeInCache(files[i], `// stub ${i}`, 300 + (i % 200), "file");
+    }
+    const storeMs = Date.now() - storeStart;
+    console.error(`  ${PASS} 1,000 stores in ${storeMs}ms (avg ${(storeMs / N_STORE).toFixed(2)}ms)`);
+
+    let hits = 0;
+    let misses = 0;
+    const checkStart = Date.now();
+    for (let i = 0; i < N_CHECK; i++) {
+      const wantHit = Math.random() < HIT_RATIO;
+      if (wantHit) {
+        const f = files[Math.floor(Math.random() * files.length)];
+        const got = checkCache(f);
+        if (got) hits++;
+        else misses++;
+      } else {
+        const got = checkCache(path.join(tmpCacheDir, `nonexistent-${i}.txt`));
+        if (got) hits++;
+        else misses++;
+      }
+    }
+    const checkMs = Date.now() - checkStart;
+    console.error(
+      `  ${PASS} 10,000 checks in ${checkMs}ms (avg ${(checkMs / N_CHECK).toFixed(3)}ms)`
+    );
+    console.error(`  ${PASS} ${hits} hits / ${misses} misses (target ratio ~80%)`);
+
+    const stats = await handleDedupContext({ action: "stats" });
+    await test("cache backend honored 1k stores", async () => {
+      if ((stats.totalEntries ?? 0) < N_STORE) {
+        throw new Error(`expected ${N_STORE} entries, got ${stats.totalEntries}`);
+      }
+    });
+    await test("cache backend honored 10k checks", async () => {
+      if (hits < N_CHECK * HIT_RATIO * 0.5) {
+        throw new Error(`hit rate too low (${hits} of ${N_CHECK})`);
+      }
+    });
+    console.error(`  ${PASS} stats.totalEntries=${stats.totalEntries}, totalHits=${stats.totalHits}`);
+
+    await handleDedupContext({ action: "clear" });
+  } catch (err) {
+    console.error(`  ${FAIL} dedup cache stress error: ${err}`);
+    failed++;
+  } finally {
+    try { fs.rmSync(tmpCacheDir, { recursive: true, force: true }); } catch {}
+  }
+
   // ── Cleanup ──
   try { fs.unlinkSync(pyFile); } catch {}
   try { fs.unlinkSync(txtFile); } catch {}
   await terminateOcr();
+  closeCacheDb();
 
   // ── Summary ──
   console.error(`\n${DIVIDER}`);
