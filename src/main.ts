@@ -19,12 +19,13 @@ import { handleMemory } from "./tools/memory.js";
 import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
 import { handleHelp } from "./tools/help.js";
+import { terminateOcr } from "./lib/imageProcessor.js";
 
 // ─── Server initialization ─────────────────────────────────────────────────
 
 const server = new McpServer({
-  name: "gate",
-  version: "0.2.0-alpha",
+  name: "gatemcp",
+  version: "0.3.0",
 });
 
 // ─── Tool 1: gate_optimize_image ────────────────────────────────────────────
@@ -332,18 +333,37 @@ server.registerTool(
   }
 );
 
+// ─── Graceful shutdown ──────────────────────────────────────────────────────
+
+let shuttingDown = false;
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`Received ${signal} — running graceful shutdown...`);
+  try {
+    await terminateOcr();
+  } catch (err) {
+    logger.warn(`OCR cleanup failed during shutdown: ${err}`);
+  }
+  process.exit(0);
+}
+
+process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
+
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Starting Gate-MCP server v0.2.0-alpha...");
+  logger.info("Starting gatemcp server v0.3.0...");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  logger.info("Gate-MCP server connected via stdio transport");
+  logger.info("gatemcp server connected via stdio transport");
 }
 
 main().catch((err) => {
-  logger.error(`Fatal error starting Gate-MCP: ${err}`);
+  logger.error(`Fatal error starting gatemcp: ${err}`);
   process.exit(1);
 });

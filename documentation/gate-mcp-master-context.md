@@ -1,20 +1,24 @@
-# GATE-MCP: Context Compression Gateway
-## Hackathon Session Handoff — v0.2.0-alpha
+# GATEMCP: Context Compression Gateway
+## Session Handoff — v0.3.0
 
 > **For Cursor / Windsurf / Claude Code / Antigravity agents:**
 > Read this file FIRST to understand the full project context before making changes.
+
+> **Rename note:** Package was originally `gate-mcp`. That name was taken on npm by Gate.io (crypto exchange). v0.3.0 renamed to **`gatemcp`** to avoid the collision.
 
 ---
 
 ## 1. WHAT THIS IS
 
-**gate-mcp** is a local MCP server that compresses AI context at 5 layers before it reaches the LLM, saving 37–99% of input tokens. It is a single `npm` binary with zero cloud dependencies.
+**gatemcp** is a local MCP server that compresses AI context at 5 layers before it reaches the LLM, saving 37–99% of input tokens. It is a single `npm` binary with zero cloud dependencies.
 
-```
-npm install -g gate-mcp
+```bash
+# Local install (npm publish pending)
+git clone https://github.com/Dukeabaddon/Gate-MCP.git
+cd Gate-MCP && npm install --legacy-peer-deps && npm run build
 ```
 
-**Current state:** v0.2.0-alpha, 7 tools, 63/63 tests, 3 git commits, experimentally validated on 6,115-file repos.
+**Current state (verified 2026-05-15):** v0.3.0, 7 tools, 13 unit + 53 stress tests passing, multi-language support (12 native AST + 11 regex fallback), experimentally validated on 6,115-file repos.
 
 ---
 
@@ -97,12 +101,14 @@ gate-mcp/
 
 | Component | Technology | Why |
 |---|---|---|
-| Runtime | Node.js + TypeScript ESM | Universal MCP compatibility |
-| MCP SDK | `@anthropic-ai/sdk` McpServer | Official SDK, stdio transport |
-| AST Parser | `tree-sitter` + `tree-sitter-typescript` | Deterministic, no LLM needed |
-| Graph | In-memory adjacency list (Map) | Zero deps, <100ms queries |
-| Persistence | JSON file (`.gate-mcp/memory.json`) | Zero DB dependencies |
-| Image | `sharp` + `tesseract.js` | Local OCR, no cloud APIs |
+| Runtime | Node.js ≥20 + TypeScript ESM | Universal MCP compatibility |
+| MCP SDK | `@modelcontextprotocol/sdk` ^1.12.1 | Official SDK, stdio transport |
+| AST Parser | `tree-sitter` 0.21 + 10 native language grammars (optional deps) | Deterministic, regex fallback for 11 more languages |
+| Graph | In-memory adjacency list (Map) + manifest-hash cache invalidation | Zero deps, <100ms queries, stale-safe |
+| Persistence | JSON file (`.gate-mcp/memory.json`) | Zero DB dependencies (SQLite migration planned v0.4) |
+| Image | `sharp` 0.33 + `jimp` 1.6 fallback + `tesseract.js` 5.1 | Local OCR, no cloud APIs |
+| Tokens | `gpt-tokenizer` 2.8 | Real BPE counts, not char/3.5 estimate |
+| Path safety | Custom `pathGuard.ts` boundary check | Blocks `~/.ssh`, `/etc/passwd`, traversal attempts |
 | Validation | Zod | MCP-standard input validation |
 
 ---
@@ -117,13 +123,9 @@ gate-mcp/
 
 ---
 
-## 7. GIT HISTORY (Conventional Commits)
+## 7. GIT HISTORY (Conventional Commits, latest first)
 
-```
-3956e22 feat: implement Layer 0 schema compression + gate_help meta-tool
-b3ca3cf test: add FAIROS experiments — scale, semantic quality, TOON consumption
-1d6bc46 feat: implement symbol graph, memory persistence, and TOON response compression
-```
+Inspect with `git log --oneline`. As of 2026-05-15 the repo has 6+ commits on `main`, tracked at `https://github.com/Dukeabaddon/Gate-MCP`. v0.3.0 commit adds: TSX grammar fix, path-traversal guard, cache-staleness fix, OCR shutdown handler, 10-language native parser support, npm rename.
 
 ---
 
@@ -156,13 +158,15 @@ node dist/main.js
 ```json
 {
   "mcpServers": {
-    "gate": {
+    "gatemcp": {
       "command": "node",
-      "args": ["/path/to/gate-mcp/dist/main.js"]
+      "args": ["/absolute/path/to/Gate-MCP/dist/main.js"]
     }
   }
 }
 ```
+
+Optional env vars: `GATE_PROJECT_ROOT` (path boundary), `GATE_MAX_FILES` (graph index cap, default 5000, hard cap 50000), `GATE_ALLOW_ANY_PATH=1` (disables boundary — not recommended).
 
 Works with: Cursor, Windsurf, Claude Code, Antigravity, VS Code Copilot.
 
@@ -170,7 +174,13 @@ Works with: Cursor, Windsurf, Claude Code, Antigravity, VS Code Copilot.
 
 ## 10. KNOWN ISSUES & EDGE CASES
 
-1. **Pipe in TOON values** — Fixed: `|` → `¦` (broken bar) in commit 3956e22
+1. **Pipe in TOON values** — Fixed: `|` → `¦` (broken bar) in earlier commit
 2. **tree-sitter fallback** — Some large TS files trigger `Invalid argument`, regex fallback handles them
-3. **Memory concurrency** — No file locking. Safe for single-user, not for team/multi-session
-4. **RSS memory** — 820MB RSS after indexing 6K files. Heap is only 46MB — Node.js behavior
+3. **TSX grammar** — Fixed v0.3.0: `.tsx` now uses the JSX-aware tsx grammar (was using non-TSX grammar previously, partial parse failures on JSX syntax)
+4. **Memory concurrency** — No file locking on `.gate-mcp/memory.json`. Safe for single-user, not for team/multi-session
+5. **RSS memory** — 820MB RSS after indexing 6K files. Heap is only 46MB — Node.js behavior
+6. **Path safety** — Fixed v0.3.0: all tool handlers now reject paths outside `GATE_PROJECT_ROOT` (defaults to `process.cwd()`). Sensitive paths blocked unconditionally.
+7. **Cache staleness** — Fixed v0.3.0: symbol graph cache now keyed by manifest hash (path + mtime + size SHA-256). Modified files trigger automatic rebuild.
+8. **OCR worker lifecycle** — Fixed v0.3.0: SIGINT/SIGTERM/beforeExit handlers now call `terminateOcr()` for graceful shutdown.
+9. **File discovery cap** — Configurable via `GATE_MAX_FILES` env var (default 5000, hard cap 50000). Logs warning when cap is hit.
+10. **VB.NET, Dart** — Not supported (no maintained tree-sitter parser).

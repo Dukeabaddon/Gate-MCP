@@ -56,6 +56,7 @@ export interface GraphQueryResponse {
 
 let cachedGraph: SymbolGraph | null = null;
 let cachedProjectRoot: string | null = null;
+let cachedManifestHash: string | null = null;
 
 // ─── File discovery ─────────────────────────────────────────────────────────
 
@@ -63,17 +64,57 @@ const IGNORED_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next", "__pycache__",
   ".turbo", "coverage", ".nyc_output", ".cache", "vendor",
   ".venv", "venv", "env", ".env", ".tox",
+  "target", "bin", "obj", "out", "Pods", ".gradle", ".mvn",
 ]);
 
 const SUPPORTED_EXTENSIONS = new Set([
-  ".js", ".jsx", ".mjs", ".ts", ".tsx", ".py",
+  // JS/TS family
+  ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+  // Python
+  ".py", ".pyi",
+  // JVM
+  ".java", ".kt", ".kts", ".scala", ".sc",
+  // .NET
+  ".cs",
+  // Native
+  ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".h", ".c",
+  // Modern systems
+  ".go", ".rs", ".swift",
+  // Web
+  ".html", ".htm", ".css", ".scss", ".sass", ".less",
+  ".vue", ".svelte",
+  // Scripting + dynamic
+  ".rb", ".php",
+  // Config / data
+  ".json", ".jsonc", ".yaml", ".yml",
+  ".sql",
+  // Shell
+  ".sh", ".bash", ".zsh",
+  // Docs
+  ".md", ".markdown", ".mdx",
 ]);
 
-function discoverFiles(dir: string, maxFiles = 1000): string[] {
+/** Configurable via GATE_MAX_FILES env var. Default 5000, hard cap 50000. */
+const DEFAULT_MAX_FILES = Number(process.env.GATE_MAX_FILES) || 5000;
+const HARD_MAX_FILES = 50000;
+
+interface FileDiscovery {
+  files: string[];
+  truncated: boolean;
+  scannedTotal: number;
+}
+
+function discoverFiles(dir: string, maxFiles = DEFAULT_MAX_FILES): FileDiscovery {
+  const capped = Math.min(maxFiles, HARD_MAX_FILES);
   const files: string[] = [];
+  let scannedTotal = 0;
+  let truncated = false;
 
   function walk(currentDir: string): void {
-    if (files.length >= maxFiles) return;
+    if (files.length >= capped) {
+      truncated = true;
+      return;
+    }
 
     let entries: fs.Dirent[];
     try {
@@ -83,7 +124,10 @@ function discoverFiles(dir: string, maxFiles = 1000): string[] {
     }
 
     for (const entry of entries) {
-      if (files.length >= maxFiles) break;
+      if (files.length >= capped) {
+        truncated = true;
+        break;
+      }
 
       if (entry.isDirectory()) {
         if (!IGNORED_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
@@ -93,13 +137,33 @@ function discoverFiles(dir: string, maxFiles = 1000): string[] {
         const ext = path.extname(entry.name).toLowerCase();
         if (SUPPORTED_EXTENSIONS.has(ext)) {
           files.push(path.join(currentDir, entry.name));
+          scannedTotal++;
         }
       }
     }
   }
 
   walk(dir);
-  return files;
+  return { files, truncated, scannedTotal };
+}
+
+/**
+ * Compute a manifest hash of all discovered files keyed by path + mtime + size.
+ * Used to detect when on-disk state has diverged from the cached graph.
+ * Fast: only stats files, never reads contents.
+ */
+function computeManifestHash(files: string[]): string {
+  const crypto = require("node:crypto");
+  const hash = crypto.createHash("sha256");
+  for (const f of files) {
+    try {
+      const stat = fs.statSync(f);
+      hash.update(`${f}|${stat.mtimeMs}|${stat.size}\n`);
+    } catch {
+      // Skip unreadable files
+    }
+  }
+  return hash.digest("hex").slice(0, 16);
 }
 
 // ─── Import resolution ──────────────────────────────────────────────────────
@@ -218,16 +282,37 @@ function resolveImportPath(
 export function buildGraph(projectRoot: string): SymbolGraph {
   const resolvedRoot = path.resolve(projectRoot);
 
-  // Return cached graph if same project root
-  if (cachedGraph && cachedProjectRoot === resolvedRoot) {
-    logger.info(`Graph cache hit for ${resolvedRoot} (${cachedGraph.nodes.size} nodes)`);
+  const startTime = Date.now();
+
+  // Discover files first so we can compute a manifest hash for cache validation
+  const discovery = discoverFiles(resolvedRoot);
+  const { files, truncated, scannedTotal } = discovery;
+  const manifestHash = computeManifestHash(files);
+
+  // Return cached graph only if root AND manifest both match
+  if (
+    cachedGraph &&
+    cachedProjectRoot === resolvedRoot &&
+    cachedManifestHash === manifestHash
+  ) {
+    logger.info(
+      `Graph cache hit for ${resolvedRoot} (${cachedGraph.nodes.size} nodes, manifest ${manifestHash})`
+    );
     return cachedGraph;
   }
 
-  const startTime = Date.now();
-  logger.info(`Building symbol graph for: ${resolvedRoot}`);
+  if (cachedGraph && cachedProjectRoot === resolvedRoot) {
+    logger.info(`Graph cache invalidated for ${resolvedRoot}: manifest changed`);
+  }
 
-  const files = discoverFiles(resolvedRoot);
+  logger.info(`Building symbol graph for: ${resolvedRoot}`);
+  if (truncated) {
+    logger.warn(
+      `File discovery hit cap (${files.length} files indexed, more present). Set GATE_MAX_FILES env var to raise the cap (hard ceiling 50000).`
+    );
+  }
+  logger.debug(`Discovered ${scannedTotal} candidate files`);
+
   const projectFiles = new Set(files);
   const nodes = new Map<string, SymbolNode>();
   const edges: SymbolEdge[] = [];
@@ -319,13 +404,14 @@ export function buildGraph(projectRoot: string): SymbolGraph {
     fileCount: files.length,
   };
 
-  // Cache the result
+  // Cache the result with its manifest hash for staleness detection
   cachedGraph = graph;
   cachedProjectRoot = resolvedRoot;
+  cachedManifestHash = manifestHash;
 
   logger.info(
     `Graph built: ${nodes.size} nodes, ${edges.length} edges, ` +
-      `${files.length} files in ${buildTimeMs}ms`
+      `${files.length} files in ${buildTimeMs}ms (manifest ${manifestHash})`
   );
 
   return graph;
@@ -337,6 +423,7 @@ export function buildGraph(projectRoot: string): SymbolGraph {
 export function invalidateGraph(): void {
   cachedGraph = null;
   cachedProjectRoot = null;
+  cachedManifestHash = null;
   logger.info("Graph cache invalidated");
 }
 

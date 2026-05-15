@@ -153,13 +153,31 @@ if __name__ == "__main__":
   // ── Error resilience ──
   console.error(`\n${INFO} Stress Test 9: Error resilience`);
   await test("nonexistent image", async () => {
+    // Use a path inside the project boundary so the existence check fires
+    // (not the boundary check). Then expect "not found" error.
+    const missingPath = path.resolve(process.cwd(), "no-such-image.png");
     try {
-      await handleOptimizeImage({ imagePath: "/no/such/image.png" });
+      await handleOptimizeImage({ imagePath: missingPath });
       throw new Error("Should have thrown");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "";
       if (msg.includes("not found")) {
         console.error(`  ${PASS} Correctly rejected nonexistent image`);
+      } else {
+        throw err;
+      }
+    }
+  });
+
+  await test("path traversal rejected", async () => {
+    // New v0.3 behavior: paths outside project boundary must be rejected.
+    try {
+      await handleOptimizeImage({ imagePath: "/etc/passwd" });
+      throw new Error("Should have thrown");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("outside project boundary") || msg.includes("sensitive")) {
+        console.error(`  ${PASS} Correctly rejected out-of-boundary path`);
       } else {
         throw err;
       }

@@ -114,11 +114,20 @@ We adhered to strict adversarial validation through the **FAIROS** experimental 
 - Comprehensive documentation suite (README, Architecture Deep Dive, Master Context).
 - Integration of cross-IDE memory via Graphify.
 
-### Phase 4: Next Steps (Pending / Future)
-1. **LLM-in-the-Loop Test:** Pass AST-compressed signatures into Claude API and verify the generated code compiles (needs API key).
-2. **`npm publish`:** Release `gate-mcp` to the public registry.
-3. **Language Expansion:** Add parsers for Go, Java, and Rust (currently supports TS/JS/Python).
+### Phase 4: v0.3.0 — Multi-Language + Security (COMPLETED 2026-05-15)
+1. **Language Expansion (DONE):** Added native tree-sitter parsers for Java, C#, C++, Go, Rust, HTML, CSS, JSON. Total: 12 native AST + 11 regex fallback = 23 languages.
+2. **TSX grammar bug (DONE):** `.tsx` files now route to JSX-aware tsx grammar instead of `.typescript` grammar.
+3. **Path traversal protection (DONE):** New `lib/pathGuard.ts` rejects paths outside `GATE_PROJECT_ROOT`.
+4. **Cache staleness (DONE):** Symbol graph now invalidates via manifest hash on file change.
+5. **OCR shutdown (DONE):** SIGINT/SIGTERM handlers terminate Tesseract worker gracefully.
+6. **npm name (DONE):** Renamed `gate-mcp` → `gatemcp` (gate-mcp was claimed by Gate.io crypto).
+
+### Phase 5: Next Steps (Pending)
+1. **LLM-in-the-Loop Test:** Pass AST-compressed signatures into Claude API and verify the generated code compiles for all 12 native languages (needs API key).
+2. **`npm publish`:** Release `gatemcp` to the public registry once smoke-tested across 5 IDEs.
+3. **Tier 2 native parsers:** PHP, Ruby, Kotlin, Swift, Vue, Svelte, YAML, Bash, SQL, Markdown.
 4. **Proxy Mode (`gate_shrink_tools`):** Evolve L0 to aggressively proxy and rewrite the schemas of *other* MCP servers running on the user's machine.
+5. **SQLite-backed memory + tool-result cache** (v0.4).
 
 ---
 
@@ -126,7 +135,7 @@ We adhered to strict adversarial validation through the **FAIROS** experimental 
 
 Where we stand against the top tools in the market:
 
-- **vs. Graphify (32K★):** Graphify only does L1 Navigation. It requires Python, reads/writes to disk, and contains 250K+ lines of code. Gate-MCP does 5 layers, runs in-memory (Node), and is highly auditable (~1,620 LOC).
+- **vs. Graphify (32K★):** Graphify only does L1 Navigation. It requires Python, reads/writes to disk, and contains 250K+ lines of code. gatemcp does 5 layers, runs in-memory (Node), and is highly auditable (~4,800 LOC including v0.3.0 multi-language expansion).
 - **vs. Caveman (59.5K★):** Caveman focuses exclusively on *output* compression (L4). We own the *input* side (L0-L3), making us highly complementary.
 - **vs. mcp-compressor:** They do schema compression via proxy. We do schema, file, navigation, and response compression.
 
