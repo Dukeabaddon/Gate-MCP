@@ -19,7 +19,7 @@
 > 3. Multi-line `export { A, B, C } from '...'` blocks were truncated to just `export {` — fixed to capture full block.
 > 4. CommonJS `exports.foo = ...` patterns were never recognized — fixed via supplemental scan.
 >
-> **Honest benchmark on facebook/react (2,080 files, 3.93M tokens):** 80% input-token reduction at **99.1% symbol-recall fidelity** (validated by `dist/scripts/fidelity-test.js`). The pre-fix code reported 92% reduction but was secretly dropping ~31% of exported symbols — a lossy compression masquerading as semantic.
+> **Honest benchmark on facebook/react (2,080 files, 3.93M tokens):** **89% input-token reduction at 99.1% symbol-recall fidelity** (validated by `dist/scripts/fidelity-test.js`). The pre-v0.3.2 code reported 92% reduction but was secretly dropping ~31% of exported symbols AND duplicating function bodies inside exports — a lossy compression masquerading as semantic.
 >
 > **Note (v0.3.0):** This project was originally named `gate-mcp`. That npm name was claimed by Gate.io's crypto-trading MCP server. The package was renamed to **`gatemcp`** to avoid the collision.
 
@@ -142,9 +142,9 @@ Sensitive paths (`~/.ssh`, `~/.aws/credentials`, `/etc/passwd`, etc) are blocked
 | **Scale** | VSCode source (6,115 TS files) | 3.2s build, 8ms queries, 25MB RAM |
 | **Semantic Quality** | API surface retention after AST compression | **100%** (21/21 exports, 49/49 imports) |
 | **TOON Fidelity** | Parse compressed data back to original | **100%** (17/17 fields, 15/15 values) |
-| **React monorepo** (v0.3.1) | `facebook/react` `packages/` — 2,080 files, 3.93M tokens | **80% reduction → 791k tokens** ($9.41 saved per Claude Sonnet 4 query) |
-| **Symbol-recall fidelity** (v0.3.1) | 1,010 React files, 7,047 exported symbols | **99.1%** symbols preserved (6,987/7,047) |
-| **Per-file perfect recall** (v0.3.1) | 1,010 React files | **99.3%** files at exact 100% recall (1,003/1,010) |
+| **React monorepo** (v0.3.2) | `facebook/react` `packages/` — 2,080 files, 3.93M tokens | **89% reduction → 446k tokens** ($10.45 saved per Claude Sonnet 4 query) |
+| **Symbol-recall fidelity** (v0.3.2) | 1,010 React files, 7,047 exported symbols | **99.1%** symbols preserved (6,987/7,047) |
+| **Per-file perfect recall** (v0.3.2) | 1,010 React files | **99.3%** files at exact 100% recall (1,003/1,010) |
 
 Reproduce the React benchmarks with:
 
