@@ -1,6 +1,6 @@
 {
   "name": "gatemcp",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Context compression gateway for AI IDEs — save input tokens before they hit the API. Multi-language AST compression + symbol graph + TOON + OCR.",
   "type": "module",
   "main": "dist/main.js",
@@ -44,6 +44,7 @@
     "zod": "^3.24.4"
   },
   "optionalDependencies": {
+    "better-sqlite3": "^12.0.0",
     "tree-sitter-c-sharp": "^0.23.5",
     "tree-sitter-cpp": "^0.23.4",
     "tree-sitter-css": "^0.23.0",
@@ -54,6 +55,7 @@
     "tree-sitter-rust": "^0.23.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
   }

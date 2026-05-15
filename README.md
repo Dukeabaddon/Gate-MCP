@@ -13,6 +13,8 @@
   </p>
 </p>
 
+> **Note (v0.4.0):** The session dedup cache is now **persistent across IDE restarts** and safe for **concurrent IDEs**. The previous in-memory `Map` is replaced with a SQLite database (WAL journal mode, NORMAL synchronous) at `<projectRoot>/.gate-mcp/cache.db` (override with `GATE_CACHE_DB`). `better-sqlite3` is an **optional** dependency — if the native binary cannot be loaded on your platform, the cache transparently degrades to the original in-memory Map and the server keeps working. LRU eviction caps the cache at 10,000 entries or 500 MB of content, whichever is hit first. Benchmark/fidelity numbers are unchanged from v0.3.2 (89% reduction at 99.1% recall on React).
+>
 > **Note (v0.3.2):** Four P1 bugs surfaced and fixed while running the first end-to-end benchmark + fidelity validation on the public Facebook React monorepo:
 > 1. tree-sitter's Node binding has a ~32 KB string buffer — fixed via chunk-callback parsing.
 > 2. Flow-typed `.js` files (most of React's codebase) were silently dropping every export — fixed by routing `@flow` files to the TSX grammar.
@@ -78,7 +80,7 @@ gatemcp compresses at 5 layers of the MCP pipeline:
 
 **Layer 1 — Code Navigation:** Instead of reading files (~2,000 tokens each), query a symbol dependency graph (~50 tokens per query). Built with tree-sitter AST.
 
-**Layer 2 — Input Compression:** Files compressed to function signatures, imports, and class definitions across **23 languages** (see Language Support below). SHA-256 dedup prevents repeated reads.
+**Layer 2 — Input Compression:** Files compressed to function signatures, imports, and class definitions across **23 languages** (see Language Support below). SHA-256 dedup prevents repeated reads — backed by a **persistent SQLite cache** (v0.4.0) at `.gate-mcp/cache.db` so hits survive across IDE restarts and concurrent IDEs.
 
 **Layer 3 — Response Cleaning:** JSON responses converted to TOON (Token-Optimized Object Notation) — pipe-delimited tables that LLMs parse perfectly.
 
@@ -92,7 +94,7 @@ gatemcp compresses at 5 layers of the MCP pipeline:
 | 2 | `gate_compress_file` | AST signature extraction (tree-sitter) | 46–94% |
 | 3 | `gate_graph_query` | Symbol dependency graph with BFS traversal | 93–99% |
 | 4 | `gate_memory` | Cross-session key-value persistence | — |
-| 5 | `gate_dedup_context` | SHA-256 content deduplication cache | ~93% on rereads |
+| 5 | `gate_dedup_context` | SHA-256 content cache — **persistent** across sessions (v0.4.0, SQLite/WAL, in-memory fallback) | ~93% on rereads |
 | 6 | `gate_clean_response` | TOON JSON → pipe-delimited tables | 37–81% |
 | 7 | `gate_help` | Full documentation on demand | 46% schema overhead |
 
@@ -130,6 +132,7 @@ v0.3.0 adds path-traversal protection. By default, tool calls are restricted to 
 | `GATE_PROJECT_ROOT` | `process.cwd()` | Boundary for path arguments |
 | `GATE_ALLOW_ANY_PATH` | `0` | Set to `1` to disable boundary (NOT recommended) |
 | `GATE_MAX_FILES` | `5000` | Max files indexed by symbol graph (hard cap 50000) |
+| `GATE_CACHE_DB` | `<projectRoot>/.gate-mcp/cache.db` | Path to persistent dedup cache DB (v0.4.0) |
 
 Sensitive paths (`~/.ssh`, `~/.aws/credentials`, `/etc/passwd`, etc) are blocked regardless of boundary.
 
@@ -270,7 +273,7 @@ gate-mcp/
 └── tsconfig.json
 ```
 
-**Total: ~4,800 LOC · 13 unit + 53 stress tests · 0 failures**
+**Total: ~5,100 LOC · 17 unit + 63 stress tests · 0 failures**
 
 ## Tech Stack
 
@@ -304,10 +307,10 @@ npm install --legacy-peer-deps
 # Build
 npm run build
 
-# Test (13 unit tests)
+# Test (17 unit tests)
 npm test
 
-# Stress test (53 tests)
+# Stress test (63 tests)
 npm run stress
 
 # Start MCP server
@@ -322,7 +325,8 @@ npm start
 - [ ] LLM-in-the-loop validation experiment
 - [ ] VS Code extension for one-click install
 - [ ] Leiden community detection for architecture analysis
-- [ ] SQLite-backed memory + tool-result cache (v0.4)
+- [x] SQLite-backed dedup cache (v0.4.0 — shipped)
+- [ ] SQLite-backed memory + tool-result cache (v0.4.x)
 - [ ] Ollama/LiteLLM hybrid routing (v0.5)
 
 ## License
