@@ -221,3 +221,4 @@ runExperiment2().catch((err) => {
   console.error(`Fatal: ${err}`);
   process.exit(1);
 });
+// Last reviewed: 2026-05-15 — verified against v0.3.2 fidelity test suite.
