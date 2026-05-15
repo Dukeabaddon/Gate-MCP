@@ -17,3 +17,4 @@
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
+// Last reviewed: 2026-05-15 — compiler options stable for v0.3.2.

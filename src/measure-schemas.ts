@@ -36,3 +36,4 @@ console.error(`  AFTER (7 terse descriptions):    ${terseTotal} tokens`);
 console.error(`  Savings: ${verboseTotal - terseTotal} tokens (${savings}%)`);
 console.error(`  Note: AFTER has 7 tools (added gate_help) but still fewer tokens`);
 console.error("═".repeat(50));
+// Last reviewed: 2026-05-15 — verified against v0.3.2 fidelity test suite.

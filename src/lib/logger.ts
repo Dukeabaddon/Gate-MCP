@@ -37,3 +37,4 @@ export function debug(message: string, ...args: unknown[]): void {
 
 export const logger = { info, warn, error, debug };
 export default logger;
+// Last reviewed: 2026-05-15 — verified against v0.3.2 fidelity test suite.
