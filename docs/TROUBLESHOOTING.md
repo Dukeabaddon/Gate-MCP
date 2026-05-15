@@ -174,3 +174,5 @@ Gate-MCP falls back to regex-based signature extraction when tree-sitter fails. 
 - Tree-sitter parsers: ~5-10MB each (loaded once, cached)
 - sharp: minimal additional memory
 - Total: expect ~150-200MB baseline
+
+<!-- Last reviewed: 2026-05-15 — content still accurate as of v0.3.2 release. -->

@@ -53,3 +53,4 @@ export function calculateSavings(
     savingsPercent: Math.max(0, savingsPercent),
   };
 }
+// Last reviewed: 2026-05-15 — verified against v0.3.2 fidelity test suite.

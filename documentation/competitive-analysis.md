@@ -199,3 +199,5 @@ No single tool achieves this. Graphify saves on navigation. Caveman saves on out
 4. **Don't touch vendor/.** That's reference code, not our source.
 5. **Run tests before committing.** `node dist/test.js` must pass 13/13.
 6. **Use gate_help for documentation.** Don't duplicate tool docs in README.
+
+<!-- Last reviewed: 2026-05-15 — content still accurate as of v0.3.2 release. -->

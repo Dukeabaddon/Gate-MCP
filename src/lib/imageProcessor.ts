@@ -203,3 +203,4 @@ export async function terminateOcr(): Promise<void> {
     tesseractWorker = null;
   }
 }
+// Last reviewed: 2026-05-15 — verified against v0.3.2 fidelity test suite.

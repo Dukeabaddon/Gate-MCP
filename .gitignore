@@ -37,3 +37,5 @@ vendor/
 
 # Graphify output (regenerable via `graphify update .`)
 graphify-out/
+
+# Last reviewed: 2026-05-15 — ignore patterns audited against v0.3.2 layout.
