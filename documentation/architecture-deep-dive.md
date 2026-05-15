@@ -92,13 +92,32 @@ If tree-sitter throws `Invalid argument` (happens on some large/unusual TS files
 2. Fall back to regex-based extraction
 3. Log warning but continue processing
 
-### Supported Languages
+### Supported Languages (v0.3.0)
+
+**Tier 1 — Native tree-sitter AST extraction**
+
 | Language | Parser | Status |
 |---|---|---|
-| TypeScript | tree-sitter-typescript | ✅ Full support |
-| JavaScript | tree-sitter-typescript (JS mode) | ✅ Full support |
-| Python | tree-sitter-python | ⚠️ Basic (import/function only) |
-| Other | Regex fallback | ⚠️ Minimal |
+| TypeScript | `tree-sitter-typescript` (.typescript grammar) | ✅ Full support |
+| TSX | `tree-sitter-typescript` (.tsx grammar) | ✅ Full support — fixed v0.3.0 |
+| JavaScript | `tree-sitter-javascript` | ✅ Full support |
+| Python | `tree-sitter-python` | ✅ Full support |
+| Java | `tree-sitter-java` | ✅ Full support |
+| C# | `tree-sitter-c-sharp` | ✅ Full support |
+| C/C++ | `tree-sitter-cpp` | ✅ Full support |
+| Go | `tree-sitter-go` | ✅ Full support |
+| Rust | `tree-sitter-rust` | ✅ Full support |
+| HTML | `tree-sitter-html` | ✅ Elements + scripts + styles |
+| CSS / SCSS / LESS | `tree-sitter-css` | ✅ Selectors + imports |
+| JSON | `tree-sitter-json` | ✅ Parse-validation only |
+
+All Tier 1 parsers are `optionalDependencies` — compile failures degrade to regex extraction without blocking startup.
+
+**Tier 2 — Regex fallback** (functional, less accurate)
+
+PHP, Ruby, Kotlin, Swift, Scala, Vue, Svelte, YAML, SQL, Bash, Markdown.
+
+**Not supported:** VB.NET, Dart — no maintained tree-sitter grammar.
 
 ---
 
@@ -153,16 +172,18 @@ File path → readFileSync() → SHA-256 hash
 
 ### Method
 ```typescript
+import { encode } from "gpt-tokenizer";
+
 function countTextTokens(text: string): number {
-  return Math.ceil(text.length / 3.5);
+  return encode(text).length;
 }
 ```
 
 ### Rationale
-- BPE tokenizers average ~3.5 characters per token for English code
-- Exact tokenization requires a 50MB+ model file
-- Our estimate is within ±10% for code, sufficient for savings metrics
-- All savings percentages use the same estimator (consistent comparison)
+- Uses `gpt-tokenizer` for real BPE counts (cl100k_base by default)
+- More accurate than char/3.5 estimate (older versions of this doc claimed char/3.5 — that was inaccurate)
+- Adds ~3MB to install footprint, ~1ms per call
+- Image tokens still estimated via OpenAI tile model: `(w * h) / 750` for high-detail, `/1500` for low-detail
 
 ---
 

@@ -5,8 +5,6 @@
  * providing token savings metrics in every response.
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import {
   getImageMetadata,
   resizeImage,
@@ -17,6 +15,7 @@ import {
   countTextTokens,
   calculateSavings,
 } from "../lib/tokenCounter.js";
+import { safeResolveExistingFile } from "../lib/pathGuard.js";
 import logger from "../lib/logger.js";
 import type { ImageIntent, ImageOptimizeResult } from "../types.js";
 
@@ -29,14 +28,10 @@ export async function handleOptimizeImage(args: {
 }): Promise<ImageOptimizeResult> {
   const { intent = "auto" } = args;
 
-  // 1. Resolve and validate path
-  const imagePath = path.isAbsolute(args.imagePath)
-    ? args.imagePath
-    : path.resolve(process.cwd(), args.imagePath);
-
-  if (!fs.existsSync(imagePath)) {
-    throw new Error(`Image file not found: ${imagePath}`);
-  }
+  // 1. Resolve, sanitize, and verify the path (boundary check, anti-traversal)
+  const imagePath = safeResolveExistingFile(args.imagePath, {
+    caller: "gate_optimize_image",
+  });
 
   logger.info(`Processing image: ${imagePath} (intent=${intent})`);
 
