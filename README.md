@@ -5,25 +5,15 @@
     Save 37–99% of input tokens before they hit the API
   </p>
   <p align="center">
+    <a href="https://gate-mcp-site.vercel.app/"><strong>Website</strong></a> •
     <a href="#installation">Install</a> •
     <a href="#how-it-works">How It Works</a> •
     <a href="#tools">Tools</a> •
     <a href="#benchmarks">Benchmarks</a> •
-    <a href="#usage">Usage</a>
+    <a href="#usage">Usage</a> •
+    <a href="#changelog">Changelog</a>
   </p>
 </p>
-
-> **Note (v0.4.0):** The session dedup cache is now **persistent across IDE restarts** and safe for **concurrent IDEs**. The previous in-memory `Map` is replaced with a SQLite database (WAL journal mode, NORMAL synchronous) at `<projectRoot>/.gate-mcp/cache.db` (override with `GATE_CACHE_DB`). `better-sqlite3` is an **optional** dependency — if the native binary cannot be loaded on your platform, the cache transparently degrades to the original in-memory Map and the server keeps working. LRU eviction caps the cache at 10,000 entries or 500 MB of content, whichever is hit first. Benchmark/fidelity numbers are unchanged from v0.3.2 (89% reduction at 99.1% recall on React).
->
-> **Note (v0.3.2):** Four P1 bugs surfaced and fixed while running the first end-to-end benchmark + fidelity validation on the public Facebook React monorepo:
-> 1. tree-sitter's Node binding has a ~32 KB string buffer — fixed via chunk-callback parsing.
-> 2. Flow-typed `.js` files (most of React's codebase) were silently dropping every export — fixed by routing `@flow` files to the TSX grammar.
-> 3. Multi-line `export { A, B, C } from '...'` blocks were truncated to just `export {` — fixed to capture full block.
-> 4. CommonJS `exports.foo = ...` patterns were never recognized — fixed via supplemental scan.
->
-> **Honest benchmark on facebook/react (2,080 files, 3.93M tokens):** **89% input-token reduction at 99.1% symbol-recall fidelity** (validated by `dist/scripts/fidelity-test.js`). The pre-v0.3.2 code reported 92% reduction but was secretly dropping ~31% of exported symbols AND duplicating function bodies inside exports — a lossy compression masquerading as semantic.
->
-> **Note (v0.3.0):** This project was originally named `gate-mcp`. That npm name was claimed by Gate.io's crypto-trading MCP server. The package was renamed to **`gatemcp`** to avoid the collision.
 
 ---
 
@@ -44,13 +34,21 @@ gatemcp is a single local MCP server that compresses at **5 layers simultaneousl
 ## Installation
 
 ```bash
-# Once published:
 npm install -g gatemcp
-
-# Until then, local install:
-git clone https://github.com/Dukeabaddon/Gate-MCP.git
-cd Gate-MCP && npm install --legacy-peer-deps && npm run build
 ```
+
+<details>
+<summary><strong>Install from source (if you prefer)</strong></summary>
+
+```bash
+git clone https://github.com/Dukeabaddon/Gate-MCP.git
+cd Gate-MCP
+npm install --legacy-peer-deps
+npm run build
+npm link   # makes "gatemcp" available system-wide
+```
+
+</details>
 
 ## How It Works
 
@@ -100,7 +98,7 @@ gatemcp compresses at 5 layers of the MCP pipeline:
 
 Every tool response includes `originalTokens`, `optimizedTokens`, and `savingsPercent`. No vague claims.
 
-## Language Support (v0.3.0)
+## Language Support
 
 Native tree-sitter AST extraction — full signature parsing:
 
@@ -119,20 +117,20 @@ Native tree-sitter AST extraction — full signature parsing:
 | CSS (.css, .scss, .less) | Markdown (.md, .mdx) |
 | JSON (.json, .jsonc) | |
 
-**Note:** Tier 2 languages use regex fallback (less accurate but functional) until native parsers are added in v0.4. All Tier 1 parsers are **optional dependencies** — install failures degrade gracefully to regex extraction rather than blocking server startup.
+All Tier 1 parsers are **optional dependencies** — install failures degrade gracefully to regex extraction rather than blocking server startup.
 
 **Not supported:** VB.NET (no maintained tree-sitter parser), Dart (Flutter parser unstable).
 
 ## Security
 
-v0.3.0 adds path-traversal protection. By default, tool calls are restricted to the current project directory.
+Path-traversal protection: by default, tool calls are restricted to the current project directory.
 
 | Env var | Default | Purpose |
 |---|---|---|
 | `GATE_PROJECT_ROOT` | `process.cwd()` | Boundary for path arguments |
 | `GATE_ALLOW_ANY_PATH` | `0` | Set to `1` to disable boundary (NOT recommended) |
 | `GATE_MAX_FILES` | `5000` | Max files indexed by symbol graph (hard cap 50000) |
-| `GATE_CACHE_DB` | `<projectRoot>/.gate-mcp/cache.db` | Path to persistent dedup cache DB (v0.4.0) |
+| `GATE_CACHE_DB` | `<projectRoot>/.gate-mcp/cache.db` | Path to persistent dedup cache DB |
 
 Sensitive paths (`~/.ssh`, `~/.aws/credentials`, `/etc/passwd`, etc) are blocked regardless of boundary.
 
@@ -145,9 +143,9 @@ Sensitive paths (`~/.ssh`, `~/.aws/credentials`, `/etc/passwd`, etc) are blocked
 | **Scale** | VSCode source (6,115 TS files) | 3.2s build, 8ms queries, 25MB RAM |
 | **Semantic Quality** | API surface retention after AST compression | **100%** (21/21 exports, 49/49 imports) |
 | **TOON Fidelity** | Parse compressed data back to original | **100%** (17/17 fields, 15/15 values) |
-| **React monorepo** (v0.3.2) | `facebook/react` `packages/` — 2,080 files, 3.93M tokens | **89% reduction → 446k tokens** ($10.45 saved per Claude Sonnet 4 query) |
-| **Symbol-recall fidelity** (v0.3.2) | 1,010 React files, 7,047 exported symbols | **99.1%** symbols preserved (6,987/7,047) |
-| **Per-file perfect recall** (v0.3.2) | 1,010 React files | **99.3%** files at exact 100% recall (1,003/1,010) |
+| **React monorepo** | `facebook/react` `packages/` — 2,080 files, 3.93M tokens | **89% reduction → 446k tokens** ($10.45 saved per Claude Sonnet 4 query) |
+| **Symbol-recall fidelity** | 1,010 React files, 7,047 exported symbols | **99.1%** symbols preserved (6,987/7,047) |
+| **Per-file perfect recall** | 1,010 React files | **99.3%** files at exact 100% recall (1,003/1,010) |
 
 Reproduce the React benchmarks with:
 
@@ -161,7 +159,8 @@ node dist/scripts/benchmark-real-repo.js ~/demo/react/packages --out report.md
 node dist/scripts/fidelity-test.js ~/demo/react/packages
 ```
 
-### Per-Turn Token Savings
+<details>
+<summary><strong>Per-Turn Token Savings (worked example)</strong></summary>
 
 ```
 Typical AI coding session (before):
@@ -181,29 +180,114 @@ With gatemcp:
   Savings: ~89%
 ```
 
+</details>
+
 ## Usage
 
-### Configure Your AI IDE
+### Configure your IDE
 
-Add to your MCP config (works with Cursor, Windsurf, Claude Code, Antigravity, VS Code Copilot):
+After `npm install -g gatemcp`, add gatemcp to your IDE's MCP config. Click your IDE below for the exact snippet.
+
+<details>
+<summary><strong>Cursor</strong> — <code>.cursor/mcp.json</code> in your workspace</summary>
 
 ```json
 {
   "mcpServers": {
     "gatemcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/Gate-MCP/dist/main.js"]
+      "command": "npx",
+      "args": ["-y", "gatemcp"]
     }
   }
 }
 ```
 
-Per-IDE config locations:
-- **Cursor:** `.cursor/mcp.json` in workspace
-- **Windsurf:** `~/.codeium/windsurf/mcp_config.json`
-- **Claude Code:** `~/.claude/mcp.json`
-- **Antigravity:** `.antigravity/mcp.json` — also requires `MCP_MODE=stdio` + `DISABLE_CONSOLE_OUTPUT=true`
-- **VS Code Copilot:** `.vscode/mcp.json` — uses `"servers"` key, not `"mcpServers"`
+Restart Cursor. Open the MCP panel (Settings → Features → MCP Servers) to verify `gatemcp` is connected.
+</details>
+
+<details>
+<summary><strong>Claude Code</strong> — <code>~/.claude/mcp.json</code></summary>
+
+```json
+{
+  "mcpServers": {
+    "gatemcp": {
+      "command": "npx",
+      "args": ["-y", "gatemcp"]
+    }
+  }
+}
+```
+
+Restart Claude Code. Run `/mcp` inside the CLI to confirm the server is listed.
+</details>
+
+<details>
+<summary><strong>Windsurf</strong> — <code>~/.codeium/windsurf/mcp_config.json</code></summary>
+
+```json
+{
+  "mcpServers": {
+    "gatemcp": {
+      "command": "npx",
+      "args": ["-y", "gatemcp"]
+    }
+  }
+}
+```
+
+Restart Windsurf. Open the MCP panel from the Cascade settings to verify.
+</details>
+
+<details>
+<summary><strong>Antigravity</strong> — <code>.antigravity/mcp.json</code> in your workspace</summary>
+
+```json
+{
+  "mcpServers": {
+    "gatemcp": {
+      "command": "npx",
+      "args": ["-y", "gatemcp"],
+      "env": {
+        "MCP_MODE": "stdio",
+        "DISABLE_CONSOLE_OUTPUT": "true"
+      }
+    }
+  }
+}
+```
+
+Antigravity requires `MCP_MODE=stdio` and `DISABLE_CONSOLE_OUTPUT=true` for clean stdout framing. Restart the agent after editing.
+</details>
+
+<details>
+<summary><strong>VS Code Copilot</strong> — <code>.vscode/mcp.json</code> in your workspace</summary>
+
+```json
+{
+  "servers": {
+    "gatemcp": {
+      "command": "npx",
+      "args": ["-y", "gatemcp"]
+    }
+  }
+}
+```
+
+**Note:** VS Code uses `"servers"` (not `"mcpServers"`). Reload the window after saving.
+</details>
+
+<details>
+<summary><strong>Other MCP-aware tools</strong> (Cline, Zed, Continue.dev, custom)</summary>
+
+Any client that supports MCP over stdio works. The generic invocation is:
+
+```bash
+npx -y gatemcp
+```
+
+Pass it via your client's MCP config — the command is `npx`, the args are `["-y", "gatemcp"]`, and gatemcp speaks vanilla stdio MCP. If your client uses a different config key (e.g. `tools.mcpServers`), adapt the wrapping object but keep the inner shape.
+</details>
 
 ### Example: Compress a File
 
@@ -264,37 +348,38 @@ gate-mcp/
 │   └── lib/
 │       ├── symbolGraph.ts    # Adjacency list + manifest-hash cache
 │       ├── astParser.ts      # tree-sitter for 12 langs + regex fallback
-│       ├── pathGuard.ts      # Path-traversal protection (v0.3)
+│       ├── pathGuard.ts      # Path-traversal protection
 │       ├── imageProcessor.ts # sharp/jimp + tesseract.js
 │       ├── tokenCounter.ts   # gpt-tokenizer BPE counting
+│       ├── cacheDb.ts        # SQLite-backed persistent dedup cache
 │       └── logger.ts         # stderr-only structured logging
-├── documentation/            # FAIROS research docs
 ├── package.json
 └── tsconfig.json
 ```
 
-**Total: ~5,100 LOC · 17 unit + 63 stress tests · 0 failures**
+**Total: ~5,500 LOC · 17 unit + 63 stress tests · 0 failures**
 
 ## Tech Stack
 
 - **Runtime:** Node.js ≥20 + TypeScript ESM
 - **MCP SDK:** `@modelcontextprotocol/sdk` ^1.12.1
-- **AST:** tree-sitter — 10 native parsers (JS, TS, TSX, Python, Java, C#, C++, Go, Rust, HTML, CSS, JSON) + regex fallback for 11 more
+- **AST:** tree-sitter — 12 native parsers (JS, TS, TSX, Python, Java, C#, C++, Go, Rust, HTML, CSS, JSON) + regex fallback for 11 more
 - **Image:** sharp ^0.33 (primary) + jimp 1.6 (fallback) + tesseract.js 5.1
 - **Tokens:** gpt-tokenizer ^2.8.1 (real BPE counts, not estimates)
+- **Cache:** better-sqlite3 ^12 (optional, WAL mode) with in-memory Map fallback
 - **Validation:** Zod
-- **Dependencies:** 10 core + 8 optional native parsers — zero cloud, zero ML models
+- **Dependencies:** 10 core + 9 optional native parsers — zero cloud, zero ML models
 
 ## Comparison
 
 | Feature | gatemcp | Graphify | Caveman | mcp-compressor |
 |---|---|---|---|---|
 | Layers compressed | **4+** | 1 (nav) | 1 (output) | 1 (schema) |
-| Installation | `npm i -g` (after publish) | `pip install` | System prompt | npm |
+| Installation | `npm i -g` | `pip install` | System prompt | npm |
 | Cloud required | No | No | No | No |
 | ML models needed | No | No | No | No |
 | Languages | **12 native + 11 regex** | 25+ | Any | Any |
-| Codebase size | ~4.8K LOC | 252K LOC | ~100 lines | ~500 LOC |
+| Codebase size | ~5.5K LOC | 252K LOC | ~100 lines | ~500 LOC |
 
 gatemcp is the only tool that compresses at **all input-side layers** in a single binary.
 
@@ -319,7 +404,7 @@ npm start
 
 ## Roadmap
 
-- [ ] npm publish as `gatemcp`
+- [x] npm publish as `gatemcp`
 - [ ] Tier 2 languages: native tree-sitter for PHP, Ruby, Kotlin, Swift, Vue, Svelte, YAML, Bash
 - [ ] Proxy mode (compress any MCP server's schemas)
 - [ ] LLM-in-the-loop validation experiment
@@ -329,11 +414,52 @@ npm start
 - [ ] SQLite-backed memory + tool-result cache (v0.4.x)
 - [ ] Ollama/LiteLLM hybrid routing (v0.5)
 
+## Changelog
+
+<details>
+<summary><strong>v0.4.0</strong> — persistent dedup cache (SQLite/WAL)</summary>
+
+The session dedup cache is now **persistent across IDE restarts** and safe for **concurrent IDEs**. The previous in-memory `Map` is replaced with a SQLite database (WAL journal mode, NORMAL synchronous) at `<projectRoot>/.gate-mcp/cache.db` (override with `GATE_CACHE_DB`).
+
+`better-sqlite3` is an **optional** dependency — if the native binary cannot be loaded on your platform, the cache transparently degrades to the original in-memory Map and the server keeps working.
+
+LRU eviction caps the cache at 10,000 entries or 500 MB of content, whichever is hit first.
+
+Benchmark / fidelity numbers are unchanged from v0.3.2 (89% reduction at 99.1% recall on React).
+</details>
+
+<details>
+<summary><strong>v0.3.2</strong> — 4 P1 fidelity bugs surfaced + fixed</summary>
+
+Four P1 bugs surfaced and fixed while running the first end-to-end benchmark + fidelity validation on the public Facebook React monorepo:
+
+1. tree-sitter's Node binding has a ~32 KB string buffer — fixed via chunk-callback parsing.
+2. Flow-typed `.js` files (most of React's codebase) were silently dropping every export — fixed by routing `@flow` files to the TSX grammar.
+3. Multi-line `export { A, B, C } from '...'` blocks were truncated to just `export {` — fixed to capture full block.
+4. CommonJS `exports.foo = ...` patterns were never recognized — fixed via supplemental scan.
+
+**Honest benchmark on facebook/react (2,080 files, 3.93M tokens):** **89% input-token reduction at 99.1% symbol-recall fidelity** (validated by `dist/scripts/fidelity-test.js`). The pre-v0.3.2 code reported 92% reduction but was secretly dropping ~31% of exported symbols AND duplicating function bodies inside exports — a lossy compression masquerading as semantic.
+</details>
+
+<details>
+<summary><strong>v0.3.0</strong> — rename from <code>gate-mcp</code> to <code>gatemcp</code></summary>
+
+This project was originally named `gate-mcp`. That npm name was claimed by Gate.io's crypto-trading MCP server. The package was renamed to **`gatemcp`** to avoid the collision.
+
+Also: expanded to 12 native tree-sitter languages, added path-traversal protection, improved graph cache invalidation, fixed OCR worker leak, and made tree-sitter parsers optional dependencies so install failures degrade gracefully.
+</details>
+
 ## License
 
 MIT
 
 ---
+
+<p align="center">
+  <a href="https://gate-mcp-site.vercel.app/">Website</a> ·
+  <a href="https://github.com/Dukeabaddon/Gate-MCP">GitHub</a> ·
+  <a href="https://github.com/Dukeabaddon/Gate-MCP/issues">Issues</a>
+</p>
 
 <p align="center">
   <sub>Built for developers who are tired of hitting rate limits.</sub>
