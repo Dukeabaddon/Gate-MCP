@@ -130,6 +130,66 @@ Arrays of objects → pipe-delimited tables.
 - Use 'whitelist' to drop unneeded fields (e.g., keep only id, name, status)
 - Typical savings: 37% (arrays), 81% (whitelist)`,
 
+  gate_proxy_tools: `# gate_proxy_tools
+Compressed catalog of every tool from your downstream MCP servers
+(GitHub, Postgres, Filesystem, etc.). Treats gatemcp as a single
+MCP endpoint that fronts your whole MCP server roster.
+
+## Parameters
+- action (required): 'list' | 'describe' | 'status' | 'refresh' (default: 'list')
+  - 'list': Compressed catalog of all downstream tools (default)
+  - 'describe': Full JSON Schema for one specific tool (call this just before invoking)
+  - 'status': Currently open downstream connections
+  - 'refresh': Drop cached connections + re-list (use after restarting a server)
+- server (optional): Filters list to one server; required for describe
+- tool (optional): Tool name on the chosen server; required for describe
+- maxPerServer (optional): Cap tools listed per server (debug aid, default 999)
+- projectRoot (optional): Project root for config lookup
+
+## Configuration
+Create .gate-mcp/proxy-servers.json in your project root:
+\`\`\`json
+{
+  "servers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "..." }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"]
+    }
+  }
+}
+\`\`\`
+Override the config path with GATE_PROXY_CONFIG env var.
+
+## When to use
+- When you have 5+ MCP servers configured and per-turn schema overhead is hurting context budget
+- Use 'list' once per session to discover; the LLM should call 'describe' only before invoking a specific tool
+- Typical savings on a 10-server roster: 70-90% of MCP schema overhead`,
+
+  gate_proxy_call: `# gate_proxy_call
+Forward a tool invocation to a downstream MCP server through gatemcp's
+compressor. Response is auto-compressed via TOON (or pass format='raw' to bypass).
+
+## Parameters
+- server (required): Downstream server name (must exist in proxy-servers.json)
+- tool (required): Tool name on the downstream server
+- args (optional): Object of arguments forwarded verbatim to the downstream tool
+- format (optional): 'toon' | 'compact' | 'whitelist' | 'raw' (default: 'toon')
+- whitelist (optional): Fields to keep when format='whitelist'
+- maxArrayItems (optional): Truncate large arrays in the response (default 50)
+- projectRoot (optional): Project root for config lookup
+- timeoutMs (optional): Per-call timeout in ms. 0 disables. Defaults to 30000 or GATE_PROXY_TIMEOUT_MS env var.
+
+## When to use
+- After gate_proxy_tools list/describe has shown you which downstream tool to call
+- The compressed response is what the LLM sees — raw response stays on gatemcp
+- Connections are kept warm across calls (one spawn per server per session)
+- Wedged downstream servers are auto-dropped on timeout`,
+
   gate_help: `# gate_help
 This tool. Returns full documentation for any Gate-MCP tool.
 
@@ -150,7 +210,7 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
   // Directory mode — list all tools with one-line descriptions
   if (!tool || tool === "all" || tool === "directory") {
     const directory = [
-      "# gatemcp Tool Directory (v0.4.0)",
+      "# gatemcp Tool Directory (v0.5.0)",
       "",
       "| Tool | Purpose |",
       "|---|---|",
@@ -158,8 +218,10 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
       "| gate_compress_file | AST code compression via tree-sitter (46-94% savings) |",
       "| gate_graph_query | Symbol dependency graph with BFS (93-99% savings) |",
       "| gate_memory | Cross-session key-value persistence |",
-      "| gate_dedup_context | SHA-256 session dedup cache (auto-integrated) |",
+      "| gate_dedup_context | SHA-256 session dedup cache (auto-integrated, SQLite-backed) |",
       "| gate_clean_response | TOON JSON compressor (37-81% savings) |",
+      "| gate_proxy_tools | Compressed catalog of downstream MCP servers (70-90% schema savings) |",
+      "| gate_proxy_call | Forward a downstream MCP tool call through gatemcp's compressor |",
       "| gate_help | This tool — full docs for any tool |",
       "",
       "Use gate_help with tool='<name>' for full documentation.",
@@ -172,7 +234,7 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
       tool: "directory",
       documentation: directory,
       tokens,
-      note: `Tool directory: 7 tools. Use tool='<name>' for full docs.`,
+      note: `Tool directory: 9 tools. Use tool='<name>' for full docs.`,
     };
   }
 

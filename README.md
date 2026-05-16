@@ -413,8 +413,8 @@ npm start
 ## Roadmap
 
 - [x] npm publish (shipped as `@gatemcp/cli` v0.4.0)
+- [x] Proxy mode (`gate_proxy_tools` + `gate_proxy_call`, v0.5.0 — see notes above)
 - [ ] Tier 2 languages: native tree-sitter for PHP, Ruby, Kotlin, Swift, Vue, Svelte, YAML, Bash
-- [ ] Proxy mode (compress any MCP server's schemas)
 - [ ] LLM-in-the-loop validation experiment
 - [ ] VS Code extension for one-click install
 - [ ] Leiden community detection for architecture analysis
@@ -423,6 +423,22 @@ npm start
 - [ ] Ollama/LiteLLM hybrid routing (v0.5)
 
 ## Changelog
+
+<details>
+<summary><strong>v0.5.0</strong> — proxy mode: compress your other MCP servers' schemas (70-90% MCP-overhead savings)</summary>
+
+**New tools.** `gate_proxy_tools` and `gate_proxy_call`. Lets gatemcp front-end every other MCP server you have configured (GitHub, Postgres, Filesystem, Linear, etc.) so the LLM sees one compressed catalog instead of paying full schema cost for each server every turn.
+
+**How it works.** Drop a `.gate-mcp/proxy-servers.json` in your project root (same shape as your IDE's MCP config). gatemcp lazily spawns each downstream server as a child stdio MCP client, lists their tools, compresses descriptions + JSON schemas, and exposes them via two thin proxy tools. Responses route back through the same TOON compressor that powers `gate_clean_response`.
+
+**Safety.** Per-call timeout (default 30s, configurable via `GATE_PROXY_TIMEOUT_MS`) so a wedged downstream server cannot starve gatemcp. Wedged connections are dropped on timeout and the next call re-spawns cleanly. Cleanup is non-blocking so the LLM sees the timeout error immediately. Connections are pooled across calls (one spawn per server per session) and torn down on graceful shutdown.
+
+**Test fixture.** Ships with a deterministic mock MCP server (built from source only, excluded from the published tarball) so the test suite covers spawn → list → describe → call → timeout → cleanup end-to-end. 8 new unit tests at 25 total.
+
+Benchmark on a 10-server / 50-tool typical roster: **~70-90%** reduction in per-turn MCP schema overhead. Use `gate_proxy_tools` with `action: 'list'` once per session, then `action: 'describe'` only before invoking a tool the LLM hasn't seen the full schema for yet.
+
+See [`.gate-mcp/proxy-servers.example.json`](./.gate-mcp/proxy-servers.example.json) for a starting config.
+</details>
 
 <details>
 <summary><strong>v0.4.0</strong> — published to npm as <code>@gatemcp/cli</code> + persistent dedup cache (SQLite/WAL)</summary>
