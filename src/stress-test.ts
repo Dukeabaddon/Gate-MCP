@@ -13,6 +13,11 @@ import { handleDedupContext } from "./tools/dedupContext.js";
 import { checkCache, storeInCache } from "./tools/dedupContext.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb, isPersistent } from "./lib/cacheDb.js";
+import {
+  detectLanguage,
+  extractSignatures,
+  hasNativeTreeSitterGrammar,
+} from "./lib/astParser.js";
 
 const DIVIDER = "═".repeat(60);
 const PASS = "✅";
@@ -111,6 +116,51 @@ if __name__ == "__main__":
     );
     console.error(`  Content:\n${result.content}`);
   });
+
+  // ── Tier-2 optional grammars (fixture paths; skip assertions if dep missing) ──
+  console.error(`\n${INFO} Stress Test 4b: Tier-2 grammar fixtures`);
+  const tier2Dir = path.resolve(process.cwd(), "test-fixtures/tier2");
+  const tier2Specs: { name: string; needles: string[] }[] = [
+    { name: "sample.php", needles: ["tier2_global", "SamplePhp"] },
+    { name: "sample.rb", needles: ["SampleRuby", "tier2_rb"] },
+    { name: "sample.kt", needles: ["tier2Kotlin", "SampleKotlin"] },
+    { name: "sample.sh", needles: ["tier2_bash"] },
+    { name: "sample.swift", needles: ["tier2Swift", "tier2Global"] },
+    { name: "sample.vue", needles: [] },
+    { name: "sample.svelte", needles: [] },
+    { name: "sample.yaml", needles: [] },
+  ];
+
+  for (const spec of tier2Specs) {
+    const filePath = path.join(tier2Dir, spec.name);
+    await test(`tier2 fixture ${spec.name}`, async () => {
+      if (!fs.existsSync(filePath)) {
+        throw new Error(`missing fixture: ${filePath}`);
+      }
+      const lang = detectLanguage(filePath);
+      const raw = fs.readFileSync(filePath, "utf8");
+      const sig = extractSignatures(raw, lang);
+      const native = hasNativeTreeSitterGrammar(lang);
+
+      const compressed = await handleCompressFile({ filePath, depth: "signature" });
+      if (compressed.savingsPercent < 0) throw new Error("Negative savings");
+
+      if (!native) {
+        console.error(
+          `  ${INFO} ${spec.name}: optional grammar not loaded (${lang}); regex path OK`
+        );
+        return;
+      }
+
+      const hay = JSON.stringify(sig);
+      for (const needle of spec.needles) {
+        if (!hay.includes(needle)) {
+          throw new Error(`expected native AST to contain ${needle}`);
+        }
+      }
+      console.error(`  ${PASS} ${spec.name}: native AST (${lang})`);
+    });
+  }
 
   // ── Compress File: Unknown language fallback ──
   console.error(`\n${INFO} Stress Test 5: Unknown language fallback`);

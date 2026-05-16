@@ -26,6 +26,9 @@ Thumbs.db
 protocols/
 GEMINI.md
 
+# Local npm pack artifacts
+*.tgz
+
 # Gate-MCP runtime data (user-specific) — but commit the proxy example so
 # users can copy it as a starting config without hunting through README.
 .gate-mcp/

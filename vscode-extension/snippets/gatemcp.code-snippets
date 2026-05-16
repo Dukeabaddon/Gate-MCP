@@ -1,0 +1,26 @@
+{
+  "gatemcp MCP server (stdio via npx)": {
+    "prefix": "gatemcp-mcp",
+    "description": "MCP server entry for @gatemcp/cli",
+    "body": [
+      "\"gatemcp\": {",
+      "  \"command\": \"npx\",",
+      "  \"args\": [\"-y\", \"@gatemcp/cli\"]",
+      "}"
+    ]
+  },
+  "gatemcp MCP server (Cursor workspace file)": {
+    "prefix": "gatemcp-cursor-mcp",
+    "description": "Cursor .cursor/mcp.json mcpServers block",
+    "body": [
+      "{",
+      "  \"mcpServers\": {",
+      "    \"gatemcp\": {",
+      "      \"command\": \"npx\",",
+      "      \"args\": [\"-y\", \"@gatemcp/cli\"]",
+      "    }",
+      "  }",
+      "}"
+    ]
+  }
+}

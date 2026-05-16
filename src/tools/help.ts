@@ -190,6 +190,39 @@ compressor. Response is auto-compressed via TOON (or pass format='raw' to bypass
 - Connections are kept warm across calls (one spawn per server per session)
 - Wedged downstream servers are auto-dropped on timeout`,
 
+  gate_validate_compression: `# gate_validate_compression
+LLM-in-the-loop validator for the compression pipeline. Asks the question:
+"If an LLM only sees the compressed view of this file, can it still do real work?"
+Returns a 0-100 score across three dimensions:
+  - Symbol recall (40%): does the LLM still know every exported symbol?
+  - Usage code (35%): can it write a fresh file that imports + uses 3+ exports?
+  - Specificity (25%): are audit/test answers grounded in real symbols, not generic?
+
+## Parameters
+- filePath (required): Source file to validate (any supported language)
+- mode (optional): 'prompts' | 'score' | 'run' (default: 'run')
+  - 'prompts': Generate the 4 validation prompts only (no LLM call). For tooling
+    that wants to drive its own LLM and submit responses back.
+  - 'score': Accept caller-supplied LLM responses and score them. Use when your
+    IDE's own LLM is the judge — pass responses keyed by prompt id.
+  - 'run': Call the configured provider end-to-end, then score.
+- responses (optional): When mode='score', dict of {promptId: responseText}
+- provider (optional): 'mock' (default, no API key) | 'ollama' | 'openai'
+  - 'mock': Deterministic baseline used by CI tests — produces a perfect or
+    half-faulty response so the scoring code path is exercised
+  - 'ollama': Local Ollama HTTP server (default http://localhost:11434).
+    Env: OLLAMA_BASE_URL, OLLAMA_MODEL (default qwen2.5-coder:7b)
+  - 'openai': OpenAI / OpenAI-compatible endpoint.
+    Env: OPENAI_API_KEY (required), OPENAI_BASE_URL, OPENAI_MODEL (default gpt-4o-mini)
+- providerOpts (optional): Override provider config inline ({model, baseUrl, apiKey})
+
+## When to use
+- After changing the AST extractor — guard against silent fidelity regressions
+- Before promoting a new language to "supported" tier — confirm the LLM
+  experience is acceptable, not just that the parser doesn't crash
+- In CI with provider='mock' for cheap regression coverage
+- As a manual experiment with provider='ollama' for free real-LLM signal`,
+
   gate_help: `# gate_help
 This tool. Returns full documentation for any Gate-MCP tool.
 
@@ -222,6 +255,7 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
       "| gate_clean_response | TOON JSON compressor (37-81% savings) |",
       "| gate_proxy_tools | Compressed catalog of downstream MCP servers (70-90% schema savings) |",
       "| gate_proxy_call | Forward a downstream MCP tool call through gatemcp's compressor |",
+      "| gate_validate_compression | LLM-in-the-loop 0-100 quality score for a file's compressed view |",
       "| gate_help | This tool — full docs for any tool |",
       "",
       "Use gate_help with tool='<name>' for full documentation.",
@@ -234,7 +268,7 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
       tool: "directory",
       documentation: directory,
       tokens,
-      note: `Tool directory: 9 tools. Use tool='<name>' for full docs.`,
+      note: `Tool directory: 10 tools. Use tool='<name>' for full docs.`,
     };
   }
 

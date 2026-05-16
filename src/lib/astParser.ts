@@ -2,8 +2,11 @@
  * AST Parser for Gate-MCP.
  *
  * Uses tree-sitter to extract structural signatures from source code.
- * Native parsers: JS, TS, TSX, Python, Java, C#, C++, Go, Rust, HTML, CSS, JSON.
- * Regex fallback: SQL, PHP, Ruby, Kotlin, Swift, Scala, Vue, Svelte, YAML, Bash, Markdown.
+ * Tier 1 native: JS, TS, TSX, Python, Java, C#, C++, Go, Rust, HTML, CSS, JSON.
+ * Tier 2 native (optional deps, tree-sitter @0.21 peer): PHP, Ruby, Kotlin, Bash,
+ *   Swift when install + compile succeed.
+ * Regex fallback: SQL, Scala, Markdown; also Vue / YAML / Svelte until grammar
+ *   bindings match the bundled tree-sitter ABI (see getGrammarLoader).
  *
  * All native parsers are optional dependencies — loading failures degrade
  * gracefully to regex extraction without crashing the server.
@@ -133,6 +136,30 @@ function getGrammarLoader(language: SupportedLanguage): (() => any) | null {
       return () => require("tree-sitter-css");
     case "json":
       return () => require("tree-sitter-json");
+    case "php":
+      // Full PHP grammar (not php_only) — includes <?php and mixed HTML.
+      return () => require("tree-sitter-php").php;
+    case "ruby":
+      return () => require("tree-sitter-ruby");
+    case "kotlin":
+      return () => require("tree-sitter-kotlin");
+    case "bash":
+      return () => require("tree-sitter-bash");
+    case "swift":
+      // Pinned to 0.6.x for tree-sitter ^0.21 peer alignment. Upstream 0.7.x
+      // requires ^0.22. Native install can still fail (e.g. install path with
+      // spaces breaks Makefile rules that invoke tree-sitter-cli).
+      return () => require("tree-sitter-swift");
+    case "vue":
+    case "yaml":
+      // tree-sitter-vue / tree-sitter-yaml expose NAN-built Language objects that
+      // tree-sitter Node ^0.21 rejects in Parser#setLanguage ("Invalid language
+      // object"). Omit loaders until core tree-sitter is upgraded repo-wide.
+      return null;
+    case "svelte":
+      // Optional package remains for future ABI alignment; current release fails
+      // node-gyp on Node 22+ without C++17 NAN fixes — avoid noisy load attempts.
+      return null;
     default:
       return null;
   }
@@ -163,6 +190,14 @@ function getParser(language: SupportedLanguage): any | null {
     logger.warn(`tree-sitter parser unavailable for ${language} (regex fallback will be used): ${err instanceof Error ? err.message : err}`);
     return null;
   }
+}
+
+/**
+ * Returns true when a native tree-sitter grammar successfully loaded for this
+ * language (optional dependency present and Parser#setLanguage succeeded).
+ */
+export function hasNativeTreeSitterGrammar(language: SupportedLanguage): boolean {
+  return getParser(language) !== null;
 }
 
 /**
@@ -351,6 +386,21 @@ function traverseNode(
       break;
     case "json":
       collectJsonNode(node, type, result);
+      break;
+    case "php":
+      collectPhpNode(node, type, result);
+      break;
+    case "ruby":
+      collectRubyNode(node, type, result);
+      break;
+    case "kotlin":
+      collectKotlinNode(node, type, result);
+      break;
+    case "swift":
+      collectSwiftNode(node, type, result);
+      break;
+    case "bash":
+      collectBashNode(node, type, result);
       break;
   }
 
@@ -592,6 +642,116 @@ function collectCssNode(node: any, type: string, result: FileSignature): void {
 function collectJsonNode(_node: any, _type: string, _result: FileSignature): void {
   // JSON has no functions/classes/imports — leave empty. Just having the AST
   // proves the file parsed cleanly. Top-level keys could be listed if needed.
+}
+
+function collectPhpNode(node: any, type: string, result: FileSignature): void {
+  if (type === "namespace_use_declaration") {
+    result.imports.push(node.text.trim().split("\n")[0].slice(0, 400));
+  }
+  if (type === "function_definition") {
+    const nameNode = node.childForFieldName("name");
+    const params = node.childForFieldName("formal_parameters")?.text ?? "()";
+    if (nameNode) {
+      result.functions.push(`function ${nameNode.text}${params}`);
+    }
+  }
+  if (type === "method_declaration") {
+    const nameNode = node.childForFieldName("name");
+    const params = node.childForFieldName("parameters")?.text ?? "()";
+    if (nameNode) {
+      result.functions.push(`function ${nameNode.text}${params}`);
+    }
+  }
+  if (type === "class_declaration") {
+    const nameNode = node.childForFieldName("name");
+    if (nameNode) result.classes.push(`class ${nameNode.text}`);
+  }
+  if (type === "interface_declaration") {
+    const nameNode = node.childForFieldName("name");
+    if (nameNode) result.classes.push(`interface ${nameNode.text}`);
+  }
+}
+
+function collectRubyNode(node: any, type: string, result: FileSignature): void {
+  if (type === "call") {
+    const method = node.childForFieldName("method");
+    if (
+      method?.type === "identifier" &&
+      (method.text === "require" ||
+        method.text === "require_relative" ||
+        method.text === "load")
+    ) {
+      result.imports.push(node.text.trim().split("\n")[0].slice(0, 400));
+    }
+  }
+  if (type === "module" || type === "class") {
+    const constNode = node.namedChildren.find((c: any) => c.type === "constant");
+    if (constNode) {
+      result.classes.push(`${type} ${constNode.text}`);
+    }
+  }
+  if (type === "method") {
+    const nameNode = node.namedChildren.find((c: any) => c.type === "identifier");
+    const paramsNode = node.namedChildren.find((c: any) => c.type === "method_parameters");
+    if (nameNode && paramsNode) {
+      result.functions.push(`def ${nameNode.text}${paramsNode.text}`);
+    } else if (nameNode) {
+      result.functions.push(`def ${nameNode.text}`);
+    }
+  }
+}
+
+function collectKotlinNode(node: any, type: string, result: FileSignature): void {
+  if (type === "import_header") {
+    result.imports.push(node.text.trim().split("\n")[0].slice(0, 400));
+  }
+  if (type === "function_declaration") {
+    const params = node.childForFieldName("function_value_parameters")?.text ?? "()";
+    const nameId = node.namedChildren.find((c: any) => c.type === "simple_identifier");
+    if (nameId) {
+      result.functions.push(`fun ${nameId.text}${params}`);
+    }
+  }
+  if (type === "class_declaration") {
+    const tid =
+      node.childForFieldName("type_identifier") ??
+      node.namedChildren.find((c: any) => c.type === "type_identifier");
+    if (tid) result.classes.push(`class ${tid.text}`);
+  }
+}
+
+function collectSwiftNode(node: any, type: string, result: FileSignature): void {
+  if (type === "import_declaration") {
+    const line = node.text.trim().split("\n")[0].replace(/\s+/g, " ");
+    result.imports.push(line.slice(0, 400));
+  }
+  if (type === "function_declaration") {
+    const head = node.text.split("{")[0].trim().replace(/\s+/g, " ");
+    if (head.length > 0 && head.length < 400) {
+      result.functions.push(head);
+    }
+  }
+  if (type === "class_declaration" || type === "protocol_declaration") {
+    const head = node.text.split("{")[0].trim().replace(/\s+/g, " ");
+    if (head.length > 0 && head.length < 400) {
+      result.classes.push(head);
+    }
+  }
+}
+
+function collectBashNode(node: any, type: string, result: FileSignature): void {
+  if (type === "command") {
+    const line = node.text.trim().split("\n")[0];
+    if (/^(?:source|[.])\s/.test(line)) {
+      result.imports.push(line.slice(0, 400));
+    }
+  }
+  if (type === "function_definition") {
+    const head = node.text.split("{")[0].trim().replace(/\s+/g, " ");
+    if (head.length > 0 && head.length < 400) {
+      result.functions.push(head);
+    }
+  }
 }
 
 // ─── Shared AST helpers ─────────────────────────────────────────────────────
