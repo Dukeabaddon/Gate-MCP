@@ -18,6 +18,10 @@ import { handleValidateCompression } from "./tools/validateCompression.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb, isPersistent } from "./lib/cacheDb.js";
+import {
+  isMemoryPersistent,
+  _resetMemoryDbForTests,
+} from "./lib/memoryDb.js";
 
 const DIVIDER = "═".repeat(60);
 const PASS = "✅";
@@ -26,7 +30,7 @@ const INFO = "ℹ️";
 
 async function runTests(): Promise<void> {
   console.error(`\n${DIVIDER}`);
-  console.error("  gatemcp Test Suite v0.5.1");
+  console.error("  gatemcp Test Suite v0.5.2");
   console.error(DIVIDER);
 
   let passed = 0;
@@ -196,10 +200,63 @@ async function runTests(): Promise<void> {
     const clearResult = await handleMemory({ action: "clear", key: "*", projectRoot });
     console.error(`  ${PASS} CLEAR: ${clearResult.note}`);
 
+    const memBackend = isMemoryPersistent(projectRoot) ? "SQLite" : "JSON";
+    console.error(`  ${PASS} Memory backend: ${memBackend}`);
+
     passed++;
   } catch (err) {
     console.error(`  ${FAIL} Error: ${err}`);
     failed++;
+  }
+
+  // ── Test 5d: gate_memory JSON → SQLite migration (isolated project root) ──
+  console.error(`\n${INFO} Test 5d: gate_memory (memory.json migration)`);
+  try {
+    const memRoot = path.resolve(process.cwd(), "test-memory-migrate-root");
+    const gateDir = path.join(memRoot, ".gate-mcp");
+    fs.rmSync(memRoot, { recursive: true, force: true });
+    fs.mkdirSync(gateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(gateDir, "memory.json"),
+      JSON.stringify({ legacy_key: "legacy_value_from_json" }, null, 2),
+      "utf8"
+    );
+    _resetMemoryDbForTests();
+
+    const readAfter = await handleMemory({
+      action: "read",
+      key: "legacy_key",
+      projectRoot: memRoot,
+    });
+
+    const migratedPath = path.join(gateDir, "memory.json.migrated");
+    const jsonGone = !fs.existsSync(path.join(gateDir, "memory.json"));
+
+    if (readAfter.value !== "legacy_value_from_json") {
+      throw new Error(
+        `expected migrated value, got ${readAfter.value ?? "(missing)"}`
+      );
+    }
+
+    if (isMemoryPersistent(memRoot)) {
+      if (!jsonGone && !fs.existsSync(migratedPath)) {
+        throw new Error("SQLite active but memory.json was not migrated/renamed");
+      }
+      console.error(`  ${PASS} Migrated legacy_key via SQLite`);
+      if (fs.existsSync(migratedPath)) {
+        console.error(`  ${PASS} memory.json → memory.json.migrated`);
+      }
+    } else {
+      console.error(`  ${PASS} JSON fallback: legacy_key readable (no SQLite on host)`);
+    }
+
+    _resetMemoryDbForTests();
+    fs.rmSync(memRoot, { recursive: true, force: true });
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+    _resetMemoryDbForTests();
   }
 
   // ── Test 5b: gate_clean_response (TOON — array) ──
@@ -938,9 +995,10 @@ async function runTests(): Promise<void> {
   console.error(`  Results: ${passed} passed, ${failed} failed`);
   console.error(DIVIDER);
 
-  // Cleanup OCR worker + cache DB
+  // Cleanup OCR worker + cache DB + memory module state
   await terminateOcr();
   closeCacheDb();
+  _resetMemoryDbForTests();
 
   if (failed > 0) {
     process.exit(1);

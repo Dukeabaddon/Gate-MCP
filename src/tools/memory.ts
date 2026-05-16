@@ -1,15 +1,21 @@
 /**
- * gate_memory — Cross-session JSON persistence.
+ * gate_memory — Cross-session key-value persistence.
  *
- * Lightweight key-value store using a JSON file in the project root.
- * Enables agents to persist context (decisions, preferences, findings)
- * across MCP sessions without external databases.
- *
- * Storage: .gate-mcp/memory.json in the project root.
+ * v0.5.2: SQLite table in `.gate-mcp/cache.db` (shared with dedup cache, WAL)
+ * when better-sqlite3 loads. Falls back to `.gate-mcp/memory.json` otherwise.
+ * Existing memory.json is migrated once into SQLite on first open.
  */
 
-import fs from "node:fs";
-import path from "node:path";
+import {
+  isMemoryPersistent,
+  memoryBackendLabel,
+  memoryClear,
+  memoryCount,
+  memoryDelete,
+  memoryGet,
+  memoryList,
+  memoryPut,
+} from "../lib/memoryDb.js";
 import logger from "../lib/logger.js";
 
 export type MemoryAction = "read" | "write" | "delete" | "list" | "clear";
@@ -26,46 +32,14 @@ export interface MemoryResult {
   key: string;
   value?: string;
   entries?: number;
+  backend?: string;
   note: string;
 }
 
-const MEMORY_DIR = ".gate-mcp";
-const MEMORY_FILE = "memory.json";
-
-/**
- * Get the memory file path for a project.
- */
-function getMemoryPath(projectRoot: string): string {
-  return path.join(path.resolve(projectRoot), MEMORY_DIR, MEMORY_FILE);
-}
-
-/**
- * Load the memory store from disk.
- */
-function loadMemory(memoryPath: string): Record<string, string> {
-  try {
-    if (fs.existsSync(memoryPath)) {
-      const raw = fs.readFileSync(memoryPath, "utf-8");
-      return JSON.parse(raw) as Record<string, string>;
-    }
-  } catch (err) {
-    logger.warn(`Failed to load memory: ${err}`);
-  }
-  return {};
-}
-
-/**
- * Save the memory store to disk.
- */
-function saveMemory(
-  memoryPath: string,
-  store: Record<string, string>
-): void {
-  const dir = path.dirname(memoryPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(memoryPath, JSON.stringify(store, null, 2), "utf-8");
+function storageHint(projectRoot: string): string {
+  return isMemoryPersistent(projectRoot)
+    ? "SQLite (.gate-mcp/cache.db, memory_entries)"
+    : ".gate-mcp/memory.json";
 }
 
 /**
@@ -73,27 +47,29 @@ function saveMemory(
  */
 export async function handleMemory(args: MemoryInput): Promise<MemoryResult> {
   const { action, key, value, projectRoot = process.cwd() } = args;
-  const memoryPath = getMemoryPath(projectRoot);
-  const store = loadMemory(memoryPath);
+  const backend = memoryBackendLabel(projectRoot);
 
   switch (action) {
     case "read": {
-      const stored = store[key];
+      const stored = memoryGet(projectRoot, key);
+      const count = memoryCount(projectRoot);
       if (stored !== undefined) {
-        logger.info(`Memory READ: "${key}" → ${stored.length} chars`);
+        logger.info(`Memory READ: "${key}" → ${stored.length} chars (${backend})`);
         return {
           action: "read",
           key,
           value: stored,
-          entries: Object.keys(store).length,
-          note: `Found "${key}" (${stored.length} chars). ${Object.keys(store).length} total entries.`,
+          entries: count,
+          backend,
+          note: `Found "${key}" (${stored.length} chars). ${count} total entries. Backend: ${storageHint(projectRoot)}.`,
         };
       }
       return {
         action: "read",
         key,
-        entries: Object.keys(store).length,
-        note: `Key "${key}" not found. ${Object.keys(store).length} total entries.`,
+        entries: count,
+        backend,
+        note: `Key "${key}" not found. ${count} total entries. Backend: ${storageHint(projectRoot)}.`,
       };
     }
 
@@ -102,70 +78,74 @@ export async function handleMemory(args: MemoryInput): Promise<MemoryResult> {
         return {
           action: "write",
           key,
+          backend,
           note: "Error: value is required for write action.",
         };
       }
-      store[key] = value;
-      saveMemory(memoryPath, store);
-      logger.info(`Memory WRITE: "${key}" (${value.length} chars)`);
+      const count = memoryPut(projectRoot, key, value);
+      logger.info(`Memory WRITE: "${key}" (${value.length} chars, ${backend})`);
       return {
         action: "write",
         key,
         value,
-        entries: Object.keys(store).length,
-        note: `Stored "${key}" (${value.length} chars). ${Object.keys(store).length} total entries. Persisted to ${MEMORY_DIR}/${MEMORY_FILE}.`,
+        entries: count,
+        backend,
+        note: `Stored "${key}" (${value.length} chars). ${count} total entries. Backend: ${storageHint(projectRoot)}.`,
       };
     }
 
     case "delete": {
-      if (key in store) {
-        delete store[key];
-        saveMemory(memoryPath, store);
+      const { deleted, count } = memoryDelete(projectRoot, key);
+      if (deleted) {
         logger.info(`Memory DELETE: "${key}"`);
         return {
           action: "delete",
           key,
-          entries: Object.keys(store).length,
-          note: `Deleted "${key}". ${Object.keys(store).length} entries remaining.`,
+          entries: count,
+          backend,
+          note: `Deleted "${key}". ${count} entries remaining.`,
         };
       }
       return {
         action: "delete",
         key,
-        entries: Object.keys(store).length,
+        entries: count,
+        backend,
         note: `Key "${key}" not found. Nothing deleted.`,
       };
     }
 
     case "list": {
-      const keys = Object.keys(store);
-      const summary = keys
+      const rows = memoryList(projectRoot);
+      const summary = rows
         .slice(0, 25)
-        .map((k) => `${k}: ${store[k].length} chars`)
+        .map((r) => `${r.key}: ${r.length} chars`)
         .join("\n");
       const listValue =
-        keys.length === 0
+        rows.length === 0
           ? "(empty)"
-          : summary + (keys.length > 25 ? `\n... +${keys.length - 25} more` : "");
-      logger.info(`Memory LIST: ${keys.length} entries`);
+          : summary +
+            (rows.length > 25 ? `\n... +${rows.length - 25} more` : "");
+      logger.info(`Memory LIST: ${rows.length} entries (${backend})`);
       return {
         action: "list",
         key: "*",
         value: listValue,
-        entries: keys.length,
-        note: `${keys.length} entries stored in ${MEMORY_DIR}/${MEMORY_FILE}.`,
+        entries: rows.length,
+        backend,
+        note: `${rows.length} entries. Backend: ${storageHint(projectRoot)}.`,
       };
     }
 
     case "clear": {
-      const count = Object.keys(store).length;
-      saveMemory(memoryPath, {});
-      logger.info(`Memory CLEAR: removed ${count} entries`);
+      const removed = memoryClear(projectRoot);
+      logger.info(`Memory CLEAR: removed ${removed} entries`);
       return {
         action: "clear",
         key: "*",
         entries: 0,
-        note: `Cleared ${count} entries from memory.`,
+        backend,
+        note: `Cleared ${removed} entries from memory.`,
       };
     }
 
@@ -173,8 +153,8 @@ export async function handleMemory(args: MemoryInput): Promise<MemoryResult> {
       return {
         action: String(action),
         key,
+        backend,
         note: `Unknown action "${action}". Use: read, write, delete, list, clear.`,
       };
   }
 }
-// Last reviewed: 2026-05-15 — verified against v0.3.2 fidelity test suite.

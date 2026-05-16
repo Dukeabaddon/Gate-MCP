@@ -99,7 +99,7 @@ gatemcp compresses at 5 layers of the MCP pipeline:
 | 1 | `gate_optimize_image` | OCR text extraction or downscaling | 76–97% |
 | 2 | `gate_compress_file` | AST signature extraction (tree-sitter) | 46–94% |
 | 3 | `gate_graph_query` | Symbol dependency graph with BFS traversal | 93–99% |
-| 4 | `gate_memory` | Cross-session key-value persistence | — |
+| 4 | `gate_memory` | Cross-session KV — **SQLite** in `.gate-mcp/cache.db` (JSON fallback) | — |
 | 5 | `gate_dedup_context` | SHA-256 content cache — **persistent** across sessions (v0.4.0, SQLite/WAL, in-memory fallback) | ~93% on rereads |
 | 6 | `gate_clean_response` | TOON JSON → pipe-delimited tables | 37–81% |
 | 7 | `gate_help` | Full documentation on demand | 46% schema overhead |
@@ -417,17 +417,31 @@ npm start
 
 ## Roadmap
 
-- [x] npm publish (shipped as `@gatemcp/cli` v0.4.0)
-- [x] Proxy mode (`gate_proxy_tools` + `gate_proxy_call`, v0.5.0 — see notes above)
-- [x] Tier 2 optional native parsers (PHP, Ruby, Kotlin, Bash, Swift — Vue/Svelte/YAML optional deps documented; regex AST until ABI/native compile sorted)
-- [x] LLM-in-the-loop validation (`gate_validate_compression`, shipped v0.5.x)
-- [x] VS Code snippet pack (`vscode-extension/` — MCP JSON snippets + task template)
-- [ ] Leiden community detection for architecture analysis
-- [x] SQLite-backed dedup cache (v0.4.0 — shipped)
-- [ ] SQLite-backed memory + tool-result cache (v0.4.x)
-- [ ] Ollama/LiteLLM hybrid routing (v0.5)
+Core product scope is complete. Items below marked **done** ship in this repo; archived ideas are struck through (not planned for the default install path).
+
+- [x] npm publish (`@gatemcp/cli`)
+- [x] Proxy mode (`gate_proxy_tools` + `gate_proxy_call`)
+- [x] Tier 2 optional native parsers (PHP, Ruby, Kotlin, Bash, Swift; Vue/Svelte/YAML regex fallback when native grammar unavailable)
+- [x] SQLite-backed dedup cache (`.gate-mcp/cache.db`)
+- [x] SQLite-backed `gate_memory` (same DB file, `memory_entries` table; JSON fallback + one-time `memory.json` migration)
+- [x] VS Code snippet pack (`vscode-extension/` — not a Marketplace extension)
+- [x] Optional LLM validation tool (`gate_validate_compression` — `mock` default, no local LLM required)
+- ~~Leiden community detection~~ — archived (graphify covers repo-level communities; not required for compression)
+- ~~Ollama/LiteLLM hybrid routing~~ — archived (optional validation providers only; core pipeline needs no local LLM)
+- ~~Tool-result cache~~ — archived (dedup + proxy TOON cover repeat reads; no separate store planned)
 
 ## Changelog
+
+<details>
+<summary><strong>v0.5.2</strong> — SQLite-backed <code>gate_memory</code></summary>
+
+**Memory.** `gate_memory` now stores KV pairs in **`memory_entries`** inside the same `.gate-mcp/cache.db` as dedup (WAL, concurrent IDE-safe). If `better-sqlite3` is unavailable, behavior falls back to **`memory.json`**. Existing `memory.json` is imported once and renamed to `memory.json.migrated`.
+
+**Limits.** Up to 2,000 keys or ~10 MB total value size (LRU eviction) — tuned for agent notes, not file bodies.
+
+**Cons vs JSON-only:** requires optional native module for SQLite path; first open may migrate JSON; both dedup and memory share one DB file (simpler backup, single lock domain).
+
+</details>
 
 <details>
 <summary><strong>v0.5.1</strong> — Tier-2 optional tree-sitter grammars + VS Code snippet pack</summary>
@@ -449,7 +463,7 @@ npm start
 | **Graph savings %** | `gate_graph_query` compares result size to `fileCount × 800` tokens — a rough upper bound, not tokens actually read per query. Treat savings as directional, not exact billing. |
 | **Flow detection** | `.js` files with `@flow` / `@noflow` anywhere in the first 4KB route to the TSX grammar (heuristic; rare comment false positives possible). |
 | **Image auto mode** | OCR confidence 30–70% defaults to **visual** (resize), not text extraction — terminal screenshots may stay as images. |
-| **Memory** | `gate_memory` uses `.gate-mcp/memory.json` (not SQLite). Only dedup cache is SQLite-backed. |
+| **Memory fallback** | Without `better-sqlite3`, `gate_memory` uses `.gate-mcp/memory.json` (no cross-IDE WAL). Install optional dep or use same machine build for SQLite path. |
 | **Tier 2 grammars** | Vue / Svelte / YAML optional deps may not load on all platforms; regex fallback still applies. |
 
 <details>
