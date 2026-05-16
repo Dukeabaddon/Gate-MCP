@@ -243,7 +243,7 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
   // Directory mode — list all tools with one-line descriptions
   if (!tool || tool === "all" || tool === "directory") {
     const directory = [
-      "# gatemcp Tool Directory (v0.5.0)",
+      "# gatemcp Tool Directory (v0.5.1)",
       "",
       "| Tool | Purpose |",
       "|---|---|",
