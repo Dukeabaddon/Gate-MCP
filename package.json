@@ -1,5 +1,5 @@
 {
-  "name": "gatemcp",
+  "name": "@gatemcp/cli",
   "version": "0.4.0",
   "description": "Context compression gateway for AI IDEs — save 37–99% of input tokens before they hit the API. Multi-language AST compression + symbol graph + TOON + OCR.",
   "type": "module",

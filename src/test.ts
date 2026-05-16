@@ -23,7 +23,7 @@ const INFO = "ℹ️";
 
 async function runTests(): Promise<void> {
   console.error(`\n${DIVIDER}`);
-  console.error("  Gate-MCP Test Suite v0.2.0-alpha");
+  console.error("  gatemcp Test Suite v0.4.0");
   console.error(DIVIDER);
 
   let passed = 0;
