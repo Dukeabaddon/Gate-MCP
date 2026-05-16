@@ -34,8 +34,16 @@ gatemcp is a single local MCP server that compresses at **5 layers simultaneousl
 ## Installation
 
 ```bash
-npm install -g gatemcp
+npm install -g @gatemcp/cli
 ```
+
+Or use directly via npx (no install needed):
+
+```bash
+npx -y @gatemcp/cli
+```
+
+The npm package is `@gatemcp/cli` (scoped under the [@gatemcp](https://www.npmjs.com/org/gatemcp) org) but the installed CLI binary is just `gatemcp`. All IDE configs below use `npx -y @gatemcp/cli` so there's nothing to install globally if you don't want to.
 
 <details>
 <summary><strong>Install from source (if you prefer)</strong></summary>
@@ -196,7 +204,7 @@ After `npm install -g gatemcp`, add gatemcp to your IDE's MCP config. Click your
   "mcpServers": {
     "gatemcp": {
       "command": "npx",
-      "args": ["-y", "gatemcp"]
+      "args": ["-y", "@gatemcp/cli"]
     }
   }
 }
@@ -213,7 +221,7 @@ Restart Cursor. Open the MCP panel (Settings → Features → MCP Servers) to ve
   "mcpServers": {
     "gatemcp": {
       "command": "npx",
-      "args": ["-y", "gatemcp"]
+      "args": ["-y", "@gatemcp/cli"]
     }
   }
 }
@@ -230,7 +238,7 @@ Restart Claude Code. Run `/mcp` inside the CLI to confirm the server is listed.
   "mcpServers": {
     "gatemcp": {
       "command": "npx",
-      "args": ["-y", "gatemcp"]
+      "args": ["-y", "@gatemcp/cli"]
     }
   }
 }
@@ -247,7 +255,7 @@ Restart Windsurf. Open the MCP panel from the Cascade settings to verify.
   "mcpServers": {
     "gatemcp": {
       "command": "npx",
-      "args": ["-y", "gatemcp"],
+      "args": ["-y", "@gatemcp/cli"],
       "env": {
         "MCP_MODE": "stdio",
         "DISABLE_CONSOLE_OUTPUT": "true"
@@ -268,7 +276,7 @@ Antigravity requires `MCP_MODE=stdio` and `DISABLE_CONSOLE_OUTPUT=true` for clea
   "servers": {
     "gatemcp": {
       "command": "npx",
-      "args": ["-y", "gatemcp"]
+      "args": ["-y", "@gatemcp/cli"]
     }
   }
 }
@@ -286,7 +294,7 @@ Any client that supports MCP over stdio works. The generic invocation is:
 npx -y gatemcp
 ```
 
-Pass it via your client's MCP config — the command is `npx`, the args are `["-y", "gatemcp"]`, and gatemcp speaks vanilla stdio MCP. If your client uses a different config key (e.g. `tools.mcpServers`), adapt the wrapping object but keep the inner shape.
+Pass it via your client's MCP config — the command is `npx`, the args are `["-y", "@gatemcp/cli"]`, and gatemcp speaks vanilla stdio MCP. If your client uses a different config key (e.g. `tools.mcpServers`), adapt the wrapping object but keep the inner shape.
 </details>
 
 ### Example: Compress a File
@@ -404,7 +412,7 @@ npm start
 
 ## Roadmap
 
-- [x] npm publish as `gatemcp`
+- [x] npm publish (shipped as `@gatemcp/cli` v0.4.0)
 - [ ] Tier 2 languages: native tree-sitter for PHP, Ruby, Kotlin, Swift, Vue, Svelte, YAML, Bash
 - [ ] Proxy mode (compress any MCP server's schemas)
 - [ ] LLM-in-the-loop validation experiment
@@ -417,9 +425,11 @@ npm start
 ## Changelog
 
 <details>
-<summary><strong>v0.4.0</strong> — persistent dedup cache (SQLite/WAL)</summary>
+<summary><strong>v0.4.0</strong> — published to npm as <code>@gatemcp/cli</code> + persistent dedup cache (SQLite/WAL)</summary>
 
-The session dedup cache is now **persistent across IDE restarts** and safe for **concurrent IDEs**. The previous in-memory `Map` is replaced with a SQLite database (WAL journal mode, NORMAL synchronous) at `<projectRoot>/.gate-mcp/cache.db` (override with `GATE_CACHE_DB`).
+**npm publish.** Available as `npm install -g @gatemcp/cli` (or `npx -y @gatemcp/cli` for zero-install use). Scoped under the [@gatemcp](https://www.npmjs.com/org/gatemcp) organization. The unscoped name `gatemcp` is rejected by npm's similarity check against the pre-existing `gate-mcp` package (Gate.io's crypto MCP) so the scoped name is the canonical distribution name. CLI binary name remains `gatemcp` for terminal use.
+
+**Persistent dedup cache.** The session dedup cache is now **persistent across IDE restarts** and safe for **concurrent IDEs**. The previous in-memory `Map` is replaced with a SQLite database (WAL journal mode, NORMAL synchronous) at `<projectRoot>/.gate-mcp/cache.db` (override with `GATE_CACHE_DB`).
 
 `better-sqlite3` is an **optional** dependency — if the native binary cannot be loaded on your platform, the cache transparently degrades to the original in-memory Map and the server keeps working.
 

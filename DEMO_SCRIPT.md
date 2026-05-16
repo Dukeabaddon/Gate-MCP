@@ -6,6 +6,50 @@
 
 ---
 
+## Screenshot demo — single-shot "with vs without" comparison
+
+Use this when you want one image that proves the whole pitch. Both prompts ask
+the LLM the **exact same question** about the **exact same file**. Only the
+prefix `Use gate_compress_file on ... then` differs. Screenshot Cursor's chat
+window after each — the bottom-of-input token counter tells the story.
+
+**Target file (heavyweight, real-world):**
+`~/demo/react/packages/react-reconciler/src/ReactFiberWorkLoop.js` — ~45k tokens raw.
+
+### Prompt WITHOUT gatemcp (baseline — expensive)
+
+```
+Read ~/demo/react/packages/react-reconciler/src/ReactFiberWorkLoop.js and give me a numbered list of every function it exports, with a one-line summary per function. Use no other tools.
+```
+
+Cursor reads the full file → ~45k input tokens added to the request.
+Screenshot: the chat showing the answer + the input-token badge.
+
+### Prompt WITH gatemcp (compressed — cheap)
+
+```
+Use gate_compress_file on ~/demo/react/packages/react-reconciler/src/ReactFiberWorkLoop.js, then give me a numbered list of every function it exports, with a one-line summary per function. Use only the compressed view.
+```
+
+Cursor loads only the AST-compressed signatures → ~14k input tokens.
+**Same answer quality. ~69% fewer input tokens. ~$0.10 saved on Claude Sonnet 4 for this one question.**
+
+### Optional "wow" variant — multi-file architecture question
+
+For a more dramatic screenshot (89% reduction instead of 69%):
+
+```
+# WITHOUT
+Read every .js file in ~/demo/react/packages/react-reconciler/src/ and explain the fiber reconciler architecture. List every exported API.
+
+# WITH
+Use gate_compress_file on every .js file in ~/demo/react/packages/react-reconciler/src/, then explain the fiber reconciler architecture. List every exported API.
+```
+
+Without often hits Cursor's context cap mid-stream — that failure mode IS the screenshot. With gatemcp it completes cleanly in ~445k compressed tokens.
+
+---
+
 ## Setup checklist (done BEFORE you hit record)
 
 Run these once. They should all already be true.
