@@ -1,33 +1,52 @@
 {
   "name": "gatemcp",
   "version": "0.4.0",
-  "description": "Context compression gateway for AI IDEs — save input tokens before they hit the API. Multi-language AST compression + symbol graph + TOON + OCR.",
+  "description": "Context compression gateway for AI IDEs — save 37–99% of input tokens before they hit the API. Multi-language AST compression + symbol graph + TOON + OCR.",
   "type": "module",
   "main": "dist/main.js",
   "bin": {
     "gatemcp": "dist/main.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/main.js",
     "test": "node dist/test.js",
     "stress": "node dist/stress-test.js",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build && npm test"
   },
   "keywords": [
     "mcp",
     "model-context-protocol",
     "token-compression",
+    "context-compression",
     "ai-tools",
+    "ai-coding",
+    "llm",
+    "tree-sitter",
+    "ast",
     "cursor",
     "windsurf",
     "claude-code",
     "antigravity",
     "vscode-copilot"
   ],
-  "author": "",
+  "author": "Aaron Mecate",
   "license": "MIT",
+  "homepage": "https://gate-mcp-site.vercel.app/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dukeabaddon/Gate-MCP.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Dukeabaddon/Gate-MCP/issues"
+  },
   "engines": {
     "node": ">=20.0.0"
   },
