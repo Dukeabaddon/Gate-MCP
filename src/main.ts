@@ -29,7 +29,7 @@ import { closeAllProxies } from "./lib/proxyClient.js";
 
 const server = new McpServer({
   name: "gatemcp",
-  version: "0.5.1",
+  version: "0.5.2",
 });
 
 // ─── Tool 1: gate_optimize_image ────────────────────────────────────────────
@@ -171,7 +171,8 @@ server.registerTool(
   "gate_memory",
   {
     title: "Gate Memory",
-    description: "Cross-session key-value persistence to .gate-mcp/memory.json. Use gate_help for full docs.",
+    description:
+      "Cross-session KV persistence in SQLite (.gate-mcp/cache.db) or memory.json fallback. Use gate_help for full docs.",
     inputSchema: z.object({
       action: z
         .enum(["read", "write", "delete", "list", "clear"])
@@ -575,7 +576,7 @@ process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Starting gatemcp server v0.5.1...");
+  logger.info("Starting gatemcp server v0.5.2...");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

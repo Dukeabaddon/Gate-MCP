@@ -82,8 +82,12 @@ BFS traversal for dependency discovery without reading files.
 - Scales to 6,000+ files (tested on VSCode repo)`,
 
   gate_memory: `# gate_memory
-Cross-session key-value persistence via JSON file.
-Store context, decisions, preferences that survive session restarts.
+Cross-session key-value persistence (v0.5.2).
+
+## Storage
+- Primary: SQLite table \`memory_entries\` in \`.gate-mcp/cache.db\` (same file as dedup cache, WAL-safe for concurrent IDEs).
+- Fallback: \`.gate-mcp/memory.json\` when better-sqlite3 is unavailable.
+- One-time migration: existing memory.json → SQLite, then renamed to memory.json.migrated.
 
 ## Parameters
 - action (required): 'read' | 'write' | 'delete' | 'list' | 'clear'
@@ -94,8 +98,7 @@ Store context, decisions, preferences that survive session restarts.
 ## When to use
 - Persist decisions or findings across sessions
 - Store user preferences or project conventions
-- Cache expensive analysis results
-- Storage: .gate-mcp/memory.json in project root`,
+- LRU caps: 2,000 keys / ~10 MB total value size`,
 
   gate_dedup_context: `# gate_dedup_context
 Session-level SHA-256 content deduplication cache.
@@ -243,7 +246,7 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
   // Directory mode — list all tools with one-line descriptions
   if (!tool || tool === "all" || tool === "directory") {
     const directory = [
-      "# gatemcp Tool Directory (v0.5.1)",
+      "# gatemcp Tool Directory (v0.5.2)",
       "",
       "| Tool | Purpose |",
       "|---|---|",
