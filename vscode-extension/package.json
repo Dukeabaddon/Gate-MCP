@@ -1,0 +1,28 @@
+{
+  "name": "vscode-gatemcp",
+  "displayName": "gatemcp MCP snippets",
+  "description": "JSON snippets and task template for running @gatemcp/cli (npx) as an MCP server.",
+  "version": "0.1.0",
+  "publisher": "gatemcp",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Snippets"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Dukeabaddon/Gate-MCP.git"
+  },
+  "contributes": {
+    "snippets": [
+      {
+        "language": "json",
+        "path": "./snippets/gatemcp.code-snippets"
+      },
+      {
+        "language": "jsonc",
+        "path": "./snippets/gatemcp.code-snippets"
+      }
+    ]
+  }
+}

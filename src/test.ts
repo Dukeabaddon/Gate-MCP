@@ -14,6 +14,7 @@ import { handleMemory } from "./tools/memory.js";
 import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
 import { handleProxyTools, handleProxyCall } from "./tools/proxyTools.js";
+import { handleValidateCompression } from "./tools/validateCompression.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb, isPersistent } from "./lib/cacheDb.js";
@@ -25,7 +26,7 @@ const INFO = "ℹ️";
 
 async function runTests(): Promise<void> {
   console.error(`\n${DIVIDER}`);
-  console.error("  gatemcp Test Suite v0.5.0");
+  console.error("  gatemcp Test Suite v0.5.1");
   console.error(DIVIDER);
 
   let passed = 0;
@@ -747,8 +748,162 @@ async function runTests(): Promise<void> {
     }
   }
 
-  // ── Test 25: gate_optimize_image (skip if no test image) ──
-  console.error(`\n${INFO} Test 25: gate_optimize_image`);
+  // ── Test 25-28: gate_validate_compression (LLM-in-the-loop) ──
+  console.error(`\n${INFO} Test 25: validate_compression (mock provider, perfect mock)`);
+  try {
+    const target = path.resolve(process.cwd(), "src/lib/tokenCounter.ts");
+    const result = await handleValidateCompression({
+      filePath: target,
+      mode: "run",
+      provider: "mock",
+    });
+    if (!result.score) throw new Error("score missing from run mode");
+    if (result.score.aggregate < 90) {
+      throw new Error(
+        `Perfect mock should score >=90, got ${result.score.aggregate}`
+      );
+    }
+    if (result.score.verdict !== "excellent") {
+      throw new Error(
+        `Perfect mock should reach 'excellent' verdict, got '${result.score.verdict}'`
+      );
+    }
+    if ((result.answers ?? []).length !== 4) {
+      throw new Error(
+        `Expected 4 answers from 4 prompts, got ${result.answers?.length}`
+      );
+    }
+    if (result.providerDescription !== "mock-perfect") {
+      throw new Error(
+        `Expected provider 'mock-perfect', got '${result.providerDescription}'`
+      );
+    }
+    console.error(
+      `  ${PASS} Perfect mock scored ${result.score.aggregate}/100 (${result.score.verdict})`
+    );
+    console.error(
+      `  ${PASS} 4 prompts answered, ${result.exportedSymbols.length} truth symbols, ${result.tokens.savingsPercent}% token savings`
+    );
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 26: faulty mock should drop the score ──
+  console.error(
+    `\n${INFO} Test 26: validate_compression (mock provider, faulty mock drops score)`
+  );
+  try {
+    const target = path.resolve(process.cwd(), "src/lib/tokenCounter.ts");
+    const result = await handleValidateCompression({
+      filePath: target,
+      mode: "run",
+      provider: "mock",
+      providerOpts: { faulty: true },
+    });
+    if (!result.score) throw new Error("score missing");
+    if (result.score.aggregate >= 70) {
+      throw new Error(
+        `Faulty mock should score <70, got ${result.score.aggregate}`
+      );
+    }
+    if (
+      result.score.verdict === "excellent" ||
+      result.score.verdict === "good"
+    ) {
+      throw new Error(
+        `Faulty mock should NOT reach good/excellent, got '${result.score.verdict}'`
+      );
+    }
+    console.error(
+      `  ${PASS} Faulty mock correctly dropped to ${result.score.aggregate}/100 (${result.score.verdict})`
+    );
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 27: prompts-only mode returns 4 prompts, no answers/scores ──
+  console.error(
+    `\n${INFO} Test 27: validate_compression mode='prompts' (no LLM call)`
+  );
+  try {
+    const target = path.resolve(process.cwd(), "src/lib/tokenCounter.ts");
+    const result = await handleValidateCompression({
+      filePath: target,
+      mode: "prompts",
+    });
+    if (result.prompts.length !== 4) {
+      throw new Error(`expected 4 prompts, got ${result.prompts.length}`);
+    }
+    if (result.answers !== undefined) {
+      throw new Error("prompts mode should not include answers");
+    }
+    if (result.score !== undefined) {
+      throw new Error("prompts mode should not include score");
+    }
+    if (!result.compressedView || result.compressedView.length === 0) {
+      throw new Error("compressedView is empty");
+    }
+    console.error(
+      `  ${PASS} Got ${result.prompts.length} prompts, no LLM call made`
+    );
+    console.error(
+      `  ${PASS} Compressed view length: ${result.compressedView.length} chars`
+    );
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 28: mode='score' grades caller-supplied responses ──
+  console.error(
+    `\n${INFO} Test 28: validate_compression mode='score' (external LLM responses)`
+  );
+  try {
+    const target = path.resolve(process.cwd(), "src/lib/tokenCounter.ts");
+    const promptsRes = await handleValidateCompression({
+      filePath: target,
+      mode: "prompts",
+    });
+    // Build "perfect" responses by hand using the truth symbols.
+    const allSyms = promptsRes.exportedSymbols;
+    const responses: Record<string, string> = {
+      "p1-list-exports": allSyms.join("\n"),
+      "p2-write-usage":
+        `import { ${allSyms.slice(0, 3).join(", ")} } from "./tokenCounter";\n` +
+        allSyms.slice(0, 3).map((s) => `void ${s};`).join("\n"),
+      "p3-risk-audit": `Audit notes: ${allSyms.slice(0, 3).join(", ")} should be tested for boundary inputs.`,
+      "p4-test-strategy": `Strategy: cover ${allSyms.slice(0, 3).join(", ")} with property-based tests.`,
+    };
+    const result = await handleValidateCompression({
+      filePath: target,
+      mode: "score",
+      responses,
+    });
+    if (!result.score) throw new Error("score missing in score mode");
+    if (result.score.aggregate < 90) {
+      throw new Error(
+        `Hand-crafted perfect responses should score >=90, got ${result.score.aggregate}`
+      );
+    }
+    if ((result.answers ?? []).some((a) => a.meta?.externallyProvided !== true)) {
+      throw new Error("answers should be marked externallyProvided=true in score mode");
+    }
+    console.error(
+      `  ${PASS} External responses scored ${result.score.aggregate}/100 (${result.score.verdict})`
+    );
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 29: gate_optimize_image (skip if no test image) ──
+  console.error(`\n${INFO} Test 29: gate_optimize_image`);
   const testImagePaths = [
     path.resolve(process.cwd(), "test-image.png"),
     path.resolve(process.cwd(), "test-image.jpg"),

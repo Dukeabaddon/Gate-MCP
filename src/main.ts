@@ -20,6 +20,7 @@ import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
 import { handleHelp } from "./tools/help.js";
 import { handleProxyTools, handleProxyCall } from "./tools/proxyTools.js";
+import { handleValidateCompression } from "./tools/validateCompression.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb } from "./lib/cacheDb.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
@@ -28,7 +29,7 @@ import { closeAllProxies } from "./lib/proxyClient.js";
 
 const server = new McpServer({
   name: "gatemcp",
-  version: "0.5.0",
+  version: "0.5.1",
 });
 
 // ─── Tool 1: gate_optimize_image ────────────────────────────────────────────
@@ -444,7 +445,74 @@ server.registerTool(
   }
 );
 
-// ─── Tool 9: gate_help ──────────────────────────────────────────────────────
+// ─── Tool 9: gate_validate_compression ──────────────────────────────────────
+
+server.registerTool(
+  "gate_validate_compression",
+  {
+    title: "Gate Validate Compression",
+    description:
+      "LLM-in-the-loop validator: prove the compressed view of a file preserves enough signal " +
+      "for real LLM work. Returns 0-100 quality score across symbol recall, usage-code, and " +
+      "specificity. Default provider 'mock' runs without API keys. Use gate_help for full docs.",
+    inputSchema: z.object({
+      filePath: z.string().describe("Path to the source file to validate."),
+      mode: z
+        .enum(["prompts", "score", "run"])
+        .optional()
+        .default("run")
+        .describe(
+          "'prompts' = generate test prompts only, 'score' = score caller-supplied responses, " +
+            "'run' = call the configured provider end-to-end"
+        ),
+      responses: z
+        .record(z.string())
+        .optional()
+        .describe(
+          "When mode='score', a dict mapping prompt id to the LLM's text response."
+        ),
+      provider: z
+        .enum(["mock", "ollama", "openai"])
+        .optional()
+        .default("mock")
+        .describe(
+          "'mock' (default, no API key), 'ollama' (local http://localhost:11434), 'openai' (needs OPENAI_API_KEY)"
+        ),
+      providerOpts: z
+        .record(z.unknown())
+        .optional()
+        .describe("Provider-specific options (model, baseUrl, apiKey)."),
+      projectRoot: z
+        .string()
+        .optional()
+        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
+    }),
+  },
+  async (args) => {
+    try {
+      const result = await handleValidateCompression({
+        filePath: args.filePath,
+        mode: args.mode,
+        responses: args.responses,
+        provider: args.provider,
+        providerOpts: args.providerOpts as Record<string, unknown> | undefined,
+        projectRoot: args.projectRoot,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`gate_validate_compression failed: ${message}`);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool 10: gate_help ─────────────────────────────────────────────────────
 
 server.registerTool(
   "gate_help",
@@ -507,7 +575,7 @@ process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Starting gatemcp server v0.5.0...");
+  logger.info("Starting gatemcp server v0.5.1...");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

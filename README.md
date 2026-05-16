@@ -108,24 +108,26 @@ Every tool response includes `originalTokens`, `optimizedTokens`, and `savingsPe
 
 ## Language Support
 
-Native tree-sitter AST extraction — full signature parsing:
+Native tree-sitter AST extraction where grammars match the bundled `tree-sitter` runtime:
 
-| Tier 1 — Native AST | Tier 2 — Regex fallback |
+| Tier 1 — Core native | Tier 2 — Optional native (same graceful fallback as Tier 1) |
 |---|---|
-| JavaScript (.js, .jsx, .mjs, .cjs) | SQL (.sql) |
-| TypeScript (.ts, .mts, .cts) | PHP (.php) |
-| TSX (.tsx) — JSX-aware grammar | Ruby (.rb) |
-| Python (.py, .pyi) | Kotlin (.kt, .kts) |
-| Java (.java) | Swift (.swift) |
-| C# (.cs) | Scala (.scala) |
-| C / C++ (.c, .cpp, .h, .hpp, .cc) | Vue (.vue) — SFC, body only |
-| Go (.go) | Svelte (.svelte) — SFC, body only |
-| Rust (.rs) | YAML (.yaml, .yml) |
-| HTML (.html) | Bash (.sh, .bash, .zsh) |
-| CSS (.css, .scss, .less) | Markdown (.md, .mdx) |
+| JavaScript (.js, .jsx, .mjs, .cjs) | PHP (.php) — `tree-sitter-php@0.23.x` (peer ^0.21) |
+| TypeScript (.ts, .mts, .cts) | Ruby (.rb) |
+| TSX (.tsx) | Kotlin (.kt, .kts) |
+| Python (.py, .pyi) | Bash (.sh, .bash, .zsh) |
+| Java (.java) | Swift (.swift) — build may fail on some paths (see `astParser` notes) |
+| C# (.cs) | |
+| C / C++ (.c, .cpp, .h, .hpp, .cc) | |
+| Go (.go) | |
+| Rust (.rs) | |
+| HTML (.html) | |
+| CSS (.css, .scss, .less) | |
 | JSON (.json, .jsonc) | |
 
-All Tier 1 parsers are **optional dependencies** — install failures degrade gracefully to regex extraction rather than blocking server startup.
+**Regex fallback (Tier 2 surface today):** SQL, Scala, Markdown; plus **Vue**, **Svelte**, and **YAML** — optional `tree-sitter-*` packages exist on npm but their bindings do not yet pair cleanly with `tree-sitter@^0.21` (Vue/YAML) or fail native compile on newer Node (Svelte); see comments in `src/lib/astParser.ts`.
+
+All native parsers are **optional dependencies** — install failures degrade gracefully to regex extraction rather than blocking server startup.
 
 **Not supported:** VB.NET (no maintained tree-sitter parser), Dart (Flutter parser unstable).
 
@@ -400,11 +402,14 @@ npm install --legacy-peer-deps
 # Build
 npm run build
 
-# Test (17 unit tests)
+# Test (29 unit tests)
 npm test
 
-# Stress test (63 tests)
+# Stress test (85 tests)
 npm run stress
+
+# LLM-in-the-loop validation CLI (mock provider, no API key)
+node dist/scripts/validate-llm.js src/main.ts
 
 # Start MCP server
 npm start
@@ -414,9 +419,9 @@ npm start
 
 - [x] npm publish (shipped as `@gatemcp/cli` v0.4.0)
 - [x] Proxy mode (`gate_proxy_tools` + `gate_proxy_call`, v0.5.0 — see notes above)
-- [ ] Tier 2 languages: native tree-sitter for PHP, Ruby, Kotlin, Swift, Vue, Svelte, YAML, Bash
-- [ ] LLM-in-the-loop validation experiment
-- [ ] VS Code extension for one-click install
+- [x] Tier 2 optional native parsers (PHP, Ruby, Kotlin, Bash, Swift — Vue/Svelte/YAML optional deps documented; regex AST until ABI/native compile sorted)
+- [x] LLM-in-the-loop validation (`gate_validate_compression`, shipped v0.5.x)
+- [x] VS Code snippet pack (`vscode-extension/` — MCP JSON snippets + task template)
 - [ ] Leiden community detection for architecture analysis
 - [x] SQLite-backed dedup cache (v0.4.0 — shipped)
 - [ ] SQLite-backed memory + tool-result cache (v0.4.x)
@@ -425,7 +430,37 @@ npm start
 ## Changelog
 
 <details>
+<summary><strong>v0.5.1</strong> — Tier-2 optional tree-sitter grammars + VS Code snippet pack</summary>
+
+**Optional native parsers** (pinned for `tree-sitter@^0.21` peers): `tree-sitter-php`, `tree-sitter-ruby`, `tree-sitter-kotlin`, `tree-sitter-bash`, `tree-sitter-swift`. Vue / Svelte / YAML packages remain optional installs for forward compatibility; loaders stay disabled where NAN bindings or native compile break against the bundled runtime (details in `src/lib/astParser.ts`).
+
+**VS Code:** `vscode-extension/` — JSON snippets (`gatemcp-mcp`, `gatemcp-cursor-mcp`) plus README task template for `npx -y @gatemcp/cli`.
+
+**Tests:** Stress suite exercises `test-fixtures/tier2/*` one path per grammar; assertions run only when the optional grammar loads.
+
+**LLM validation.** `gate_validate_compression` (modes: `prompts` | `score` | `run`) plus CLI `node dist/scripts/validate-llm.js <file>`. Default provider `mock` needs no API key; `ollama` / `openai` optional. Four unit tests (perfect mock 100/100, faulty mock ~27/100).
+
+</details>
+
+## Known limitations
+
+| Area | Behavior |
+|------|----------|
+| **Graph savings %** | `gate_graph_query` compares result size to `fileCount × 800` tokens — a rough upper bound, not tokens actually read per query. Treat savings as directional, not exact billing. |
+| **Flow detection** | `.js` files with `@flow` / `@noflow` anywhere in the first 4KB route to the TSX grammar (heuristic; rare comment false positives possible). |
+| **Image auto mode** | OCR confidence 30–70% defaults to **visual** (resize), not text extraction — terminal screenshots may stay as images. |
+| **Memory** | `gate_memory` uses `.gate-mcp/memory.json` (not SQLite). Only dedup cache is SQLite-backed. |
+| **Tier 2 grammars** | Vue / Svelte / YAML optional deps may not load on all platforms; regex fallback still applies. |
+
+<details>
 <summary><strong>v0.5.0</strong> — proxy mode: compress your other MCP servers' schemas (70-90% MCP-overhead savings)</summary>
+
+Available on npm as `@gatemcp/cli@0.5.0` — `npm install -g @gatemcp/cli` will land this version.
+
+</details>
+
+<details>
+<summary><strong>v0.5.0 details</strong> — full notes</summary>
 
 **New tools.** `gate_proxy_tools` and `gate_proxy_call`. Lets gatemcp front-end every other MCP server you have configured (GitHub, Postgres, Filesystem, Linear, etc.) so the LLM sees one compressed catalog instead of paying full schema cost for each server every turn.
 
