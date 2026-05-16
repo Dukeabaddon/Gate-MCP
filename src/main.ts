@@ -19,14 +19,16 @@ import { handleMemory } from "./tools/memory.js";
 import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
 import { handleHelp } from "./tools/help.js";
+import { handleProxyTools, handleProxyCall } from "./tools/proxyTools.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb } from "./lib/cacheDb.js";
+import { closeAllProxies } from "./lib/proxyClient.js";
 
 // ─── Server initialization ─────────────────────────────────────────────────
 
 const server = new McpServer({
   name: "gatemcp",
-  version: "0.4.0",
+  version: "0.5.0",
 });
 
 // ─── Tool 1: gate_optimize_image ────────────────────────────────────────────
@@ -303,7 +305,146 @@ server.registerTool(
   }
 );
 
-// ─── Tool 7: gate_help ──────────────────────────────────────────────────────
+// ─── Tool 7: gate_proxy_tools ───────────────────────────────────────────────
+
+server.registerTool(
+  "gate_proxy_tools",
+  {
+    title: "Gate Proxy Tools",
+    description:
+      "Compressed catalog of every tool from your downstream MCP servers " +
+      "(GitHub, Postgres, etc.) configured in .gate-mcp/proxy-servers.json. " +
+      "Modes: list (default), describe (full schema for one tool), status, refresh. " +
+      "Cuts the per-turn MCP schema overhead by 70-90%. Use gate_help for full docs.",
+    inputSchema: z.object({
+      action: z
+        .enum(["list", "describe", "status", "refresh"])
+        .optional()
+        .default("list")
+        .describe(
+          "'list' = compressed catalog (default), 'describe' = full schema for one tool, " +
+            "'status' = currently open downstream connections, 'refresh' = drop cache + re-list"
+        ),
+      server: z
+        .string()
+        .optional()
+        .describe(
+          "Server name from proxy-servers.json. Required for describe; filters list."
+        ),
+      tool: z
+        .string()
+        .optional()
+        .describe("Tool name on the chosen server. Required for describe."),
+      maxPerServer: z
+        .number()
+        .optional()
+        .default(999)
+        .describe("Cap tools listed per server (debug aid)."),
+      projectRoot: z
+        .string()
+        .optional()
+        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
+    }),
+  },
+  async (args) => {
+    try {
+      const result = await handleProxyTools({
+        action: args.action,
+        server: args.server,
+        tool: args.tool,
+        maxPerServer: args.maxPerServer,
+        projectRoot: args.projectRoot,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`gate_proxy_tools failed: ${message}`);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool 8: gate_proxy_call ────────────────────────────────────────────────
+
+server.registerTool(
+  "gate_proxy_call",
+  {
+    title: "Gate Proxy Call",
+    description:
+      "Invoke a tool on a downstream MCP server through gatemcp's compressor. " +
+      "Response is auto-compressed via TOON unless format='raw'. " +
+      "Use gate_proxy_tools first to discover servers/tools. Use gate_help for full docs.",
+    inputSchema: z.object({
+      server: z
+        .string()
+        .describe("Downstream server name (must exist in proxy-servers.json)."),
+      tool: z.string().describe("Tool name on the downstream server."),
+      args: z
+        .record(z.unknown())
+        .optional()
+        .describe("Arguments forwarded verbatim to the downstream tool."),
+      format: z
+        .enum(["toon", "compact", "whitelist", "raw"])
+        .optional()
+        .default("toon")
+        .describe(
+          "Response compression: 'toon' (tabular, default), 'compact' (minified JSON), " +
+            "'whitelist' (keep only listed fields), 'raw' (no compression)."
+        ),
+      whitelist: z
+        .array(z.string())
+        .optional()
+        .describe("Fields to keep (whitelist mode only)."),
+      maxArrayItems: z
+        .number()
+        .optional()
+        .default(50)
+        .describe("Max array items before truncation."),
+      projectRoot: z
+        .string()
+        .optional()
+        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
+      timeoutMs: z
+        .number()
+        .optional()
+        .describe(
+          "Per-call timeout in ms. 0 disables. Defaults to 30000 or GATE_PROXY_TIMEOUT_MS env var."
+        ),
+    }),
+  },
+  async (args) => {
+    try {
+      const result = await handleProxyCall({
+        server: args.server,
+        tool: args.tool,
+        args: args.args as Record<string, unknown> | undefined,
+        format: args.format,
+        whitelist: args.whitelist,
+        maxArrayItems: args.maxArrayItems,
+        projectRoot: args.projectRoot,
+        timeoutMs: args.timeoutMs,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        isError: result.isError,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`gate_proxy_call failed: ${message}`);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool 9: gate_help ──────────────────────────────────────────────────────
 
 server.registerTool(
   "gate_help",
@@ -351,6 +492,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
   } catch (err) {
     logger.warn(`Cache DB cleanup failed during shutdown: ${err}`);
   }
+  try {
+    await closeAllProxies();
+  } catch (err) {
+    logger.warn(`Proxy connection cleanup failed during shutdown: ${err}`);
+  }
   process.exit(0);
 }
 
@@ -361,7 +507,7 @@ process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Starting gatemcp server v0.4.0...");
+  logger.info("Starting gatemcp server v0.5.0...");
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

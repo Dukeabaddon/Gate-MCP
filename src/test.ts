@@ -13,6 +13,8 @@ import { handleGraphQuery } from "./tools/graphQuery.js";
 import { handleMemory } from "./tools/memory.js";
 import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
+import { handleProxyTools, handleProxyCall } from "./tools/proxyTools.js";
+import { closeAllProxies } from "./lib/proxyClient.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb, isPersistent } from "./lib/cacheDb.js";
 
@@ -23,7 +25,7 @@ const INFO = "ℹ️";
 
 async function runTests(): Promise<void> {
   console.error(`\n${DIVIDER}`);
-  console.error("  gatemcp Test Suite v0.4.0");
+  console.error("  gatemcp Test Suite v0.5.0");
   console.error(DIVIDER);
 
   let passed = 0;
@@ -459,8 +461,294 @@ async function runTests(): Promise<void> {
     failed++;
   }
 
-  // ── Test 8: gate_optimize_image (skip if no test image) ──
-  console.error(`\n${INFO} Test 8: gate_optimize_image`);
+  // ── Test 18-24: proxy mode (gate_proxy_tools + gate_proxy_call) ──
+  // Set up an isolated project root + proxy config that points at the mock
+  // MCP server we just built. We use a tmp dir so we never touch the user's
+  // real .gate-mcp/proxy-servers.json.
+  const proxyRoot = path.resolve(process.cwd(), "test-proxy-root");
+  const proxyConfigDir = path.join(proxyRoot, ".gate-mcp");
+  const proxyConfigPath = path.join(proxyConfigDir, "proxy-servers.json");
+  const mockServerPath = path.resolve(
+    process.cwd(),
+    "dist/scripts/mock-mcp-server.js"
+  );
+  let proxyTestsRan = false;
+
+  if (!fs.existsSync(mockServerPath)) {
+    console.error(
+      `\n${INFO} Proxy tests 18-24 skipped — mock server not built at ${mockServerPath}`
+    );
+  } else {
+    try {
+      fs.mkdirSync(proxyConfigDir, { recursive: true });
+      fs.writeFileSync(
+        proxyConfigPath,
+        JSON.stringify(
+          {
+            servers: {
+              mock: {
+                command: "node",
+                args: [mockServerPath],
+                description: "test fixture server",
+              },
+            },
+          },
+          null,
+          2
+        )
+      );
+      proxyTestsRan = true;
+    } catch (err) {
+      console.error(`${FAIL} could not write proxy test config: ${err}`);
+    }
+  }
+
+  if (proxyTestsRan) {
+    // ── Test 18: empty config returns empty servers list ──
+    console.error(`\n${INFO} Test 18: gate_proxy_tools (no config → empty)`);
+    try {
+      const emptyRoot = path.join(proxyRoot, "empty-subdir");
+      fs.mkdirSync(emptyRoot, { recursive: true });
+      const result = await handleProxyTools({
+        action: "list",
+        projectRoot: emptyRoot,
+      });
+      if ((result.servers ?? []).length !== 0) {
+        throw new Error(`expected 0 servers, got ${result.servers?.length}`);
+      }
+      console.error(`  ${PASS} Empty config returns 0 servers`);
+      console.error(`  ${PASS} Helpful note: ${result.note.slice(0, 80)}...`);
+      passed++;
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    }
+
+    // ── Test 19: list mock server tools (4 expected, compressed) ──
+    console.error(
+      `\n${INFO} Test 19: gate_proxy_tools list (mock server, 4 tools)`
+    );
+    try {
+      const result = await handleProxyTools({
+        action: "list",
+        projectRoot: proxyRoot,
+      });
+      const tools = result.tools ?? [];
+      if (tools.length !== 4) {
+        throw new Error(`expected 4 tools, got ${tools.length}`);
+      }
+      const names = tools.map((t) => t.name).sort();
+      if (names.join(",") !== "add,echo,make_json_list,sleep") {
+        throw new Error(`unexpected tool names: ${names.join(",")}`);
+      }
+      const addTool = tools.find((t) => t.name === "add")!;
+      if (!addTool.params.includes("a:num") || !addTool.params.includes("b:num")) {
+        throw new Error(
+          `add tool params abbreviation wrong: ${addTool.params}`
+        );
+      }
+      console.error(
+        `  ${PASS} Listed 4 tools (add, echo, make_json_list, sleep)`
+      );
+      console.error(
+        `  ${PASS} Compressed catalog: ${result.tokenCost.rawEstimate} → ${result.tokenCost.compressed} tokens (${result.tokenCost.savingsPercent}% saved)`
+      );
+      console.error(`  ${PASS} Schema abbreviation correct: add → ${addTool.params}`);
+      passed++;
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    }
+
+    // ── Test 20: describe returns full schema ──
+    console.error(`\n${INFO} Test 20: gate_proxy_tools describe (full schema)`);
+    try {
+      const result = await handleProxyTools({
+        action: "describe",
+        server: "mock",
+        tool: "make_json_list",
+        projectRoot: proxyRoot,
+      });
+      if (!result.describe) {
+        throw new Error("describe payload missing");
+      }
+      if (result.describe.name !== "make_json_list") {
+        throw new Error(`wrong tool name: ${result.describe.name}`);
+      }
+      const schema = result.describe.inputSchema as {
+        properties?: Record<string, unknown>;
+      };
+      if (!schema.properties?.count) {
+        throw new Error("count property missing from schema");
+      }
+      console.error(`  ${PASS} Full schema returned for mock.make_json_list`);
+      console.error(`  ${PASS} description: ${result.describe.description.slice(0, 80)}...`);
+      passed++;
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    }
+
+    // ── Test 21: gate_proxy_call echo (round-trip) ──
+    console.error(`\n${INFO} Test 21: gate_proxy_call echo (round-trip)`);
+    try {
+      const result = await handleProxyCall({
+        server: "mock",
+        tool: "echo",
+        args: { message: "hello from gatemcp" },
+        format: "raw",
+        projectRoot: proxyRoot,
+      });
+      if (result.response.trim() !== "hello from gatemcp") {
+        throw new Error(`unexpected echo response: "${result.response}"`);
+      }
+      if (result.isError) {
+        throw new Error("echo unexpectedly flagged isError=true");
+      }
+      console.error(`  ${PASS} Echo round-trip succeeded`);
+      console.error(`  ${PASS} Response: "${result.response.trim()}"`);
+      passed++;
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    }
+
+    // ── Test 22: gate_proxy_call make_json_list → TOON compression saves ≥30% ──
+    console.error(
+      `\n${INFO} Test 22: gate_proxy_call make_json_list (TOON compression)`
+    );
+    try {
+      const result = await handleProxyCall({
+        server: "mock",
+        tool: "make_json_list",
+        args: { count: 25 },
+        format: "toon",
+        projectRoot: proxyRoot,
+      });
+      const { rawResponseTokens, compressedTokens, savingsPercent } =
+        result.tokenCost;
+      if (savingsPercent < 30) {
+        throw new Error(
+          `expected ≥30% savings on 25-row uniform list, got ${savingsPercent}%`
+        );
+      }
+      if (!result.response.includes("id|label|score|active")) {
+        throw new Error("TOON header row missing from response");
+      }
+      console.error(
+        `  ${PASS} TOON compression: ${rawResponseTokens} → ${compressedTokens} tokens (${savingsPercent}% saved)`
+      );
+      console.error(`  ${PASS} Header row present: id|label|score|active`);
+      passed++;
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    }
+
+    // ── Test 23: status reports the open connection ──
+    console.error(`\n${INFO} Test 23: gate_proxy_tools status`);
+    try {
+      const result = await handleProxyTools({ action: "status" });
+      const rows = result.status ?? [];
+      const mockRow = rows.find((r) => r.server === "mock");
+      if (!mockRow) {
+        throw new Error("expected mock connection in status output");
+      }
+      if (mockRow.toolsCached < 4) {
+        throw new Error(
+          `expected ≥4 cached tools, got ${mockRow.toolsCached}`
+        );
+      }
+      console.error(
+        `  ${PASS} Status reports mock connection with ${mockRow.toolsCached} tools cached`
+      );
+      passed++;
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    }
+
+    // ── Test 24a: gate_proxy_call timeout (sleep beyond timeoutMs) ──
+    console.error(
+      `\n${INFO} Test 24a: gate_proxy_call timeout (sleep > timeoutMs)`
+    );
+    try {
+      const startedAt = Date.now();
+      try {
+        await handleProxyCall({
+          server: "mock",
+          tool: "sleep",
+          args: { ms: 5_000 },
+          format: "raw",
+          projectRoot: proxyRoot,
+          timeoutMs: 250,
+        });
+        console.error(`  ${FAIL} Should have thrown a timeout error`);
+        failed++;
+      } catch (err) {
+        const elapsed = Date.now() - startedAt;
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes("timed out after")) {
+          console.error(`  ${FAIL} Wrong error: ${msg}`);
+          failed++;
+        } else if (elapsed > 2_000) {
+          console.error(
+            `  ${FAIL} Timeout fired too late (${elapsed}ms — expected <2000ms)`
+          );
+          failed++;
+        } else {
+          console.error(
+            `  ${PASS} Timeout fired in ${elapsed}ms (limit: 250ms)`
+          );
+          console.error(`  ${PASS} Wedged connection dropped (next call re-spawns)`);
+          passed++;
+        }
+      }
+    } catch (err) {
+      console.error(`  ${FAIL} Outer error: ${err}`);
+      failed++;
+    }
+
+    // ── Test 24: missing server raises a clear error ──
+    console.error(
+      `\n${INFO} Test 24: gate_proxy_call unknown server (clear error)`
+    );
+    try {
+      await handleProxyCall({
+        server: "does-not-exist",
+        tool: "echo",
+        projectRoot: proxyRoot,
+      });
+      console.error(`  ${FAIL} Should have thrown an error`);
+      failed++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("does-not-exist") || !msg.includes("proxy")) {
+        console.error(
+          `  ${FAIL} Error message lacks server name or "proxy": ${msg}`
+        );
+        failed++;
+      } else {
+        console.error(`  ${PASS} Clear error: ${msg.slice(0, 100)}...`);
+        passed++;
+      }
+    }
+
+    // Clean up: shut down proxies + remove test config
+    try {
+      await closeAllProxies();
+    } catch (err) {
+      console.error(`${INFO} proxy cleanup warning: ${err}`);
+    }
+    try {
+      fs.rmSync(proxyRoot, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // ── Test 25: gate_optimize_image (skip if no test image) ──
+  console.error(`\n${INFO} Test 25: gate_optimize_image`);
   const testImagePaths = [
     path.resolve(process.cwd(), "test-image.png"),
     path.resolve(process.cwd(), "test-image.jpg"),

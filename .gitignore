@@ -26,8 +26,12 @@ Thumbs.db
 protocols/
 GEMINI.md
 
-# Gate-MCP runtime data (user-specific)
+# Gate-MCP runtime data (user-specific) — but commit the proxy example so
+# users can copy it as a starting config without hunting through README.
 .gate-mcp/
+!.gate-mcp/
+.gate-mcp/*
+!.gate-mcp/proxy-servers.example.json
 
 # Gemini/Antigravity session data
 .gemini/
