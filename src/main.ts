@@ -21,6 +21,9 @@ import { handleCleanResponse } from "./tools/cleanResponse.js";
 import { handleHelp } from "./tools/help.js";
 import { handleProxyTools, handleProxyCall } from "./tools/proxyTools.js";
 import { handleValidateCompression } from "./tools/validateCompression.js";
+import { handleSessionStats } from "./tools/sessionStats.js";
+import { handleGateInit } from "./tools/gateInit.js";
+import { GATEMCP_VERSION } from "./version.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb } from "./lib/cacheDb.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
@@ -29,7 +32,7 @@ import { closeAllProxies } from "./lib/proxyClient.js";
 
 const server = new McpServer({
   name: "gatemcp",
-  version: "0.5.2",
+  version: GATEMCP_VERSION,
 });
 
 // ─── Tool 1: gate_optimize_image ────────────────────────────────────────────
@@ -38,7 +41,8 @@ server.registerTool(
   "gate_optimize_image",
   {
     title: "Gate Optimize Image",
-    description: "Compress images via OCR text extraction or downscaling. 76-97% savings. Use gate_help for full docs.",
+    description:
+      "Compress images via OCR text extraction or downscaling. 76-97% savings. See gate_help (recommended_stack).",
     inputSchema: z.object({
       imagePath: z
         .string()
@@ -78,17 +82,18 @@ server.registerTool(
   "gate_compress_file",
   {
     title: "Gate Compress File",
-    description: "AST code compression via tree-sitter. Extract signatures, discard implementation. 46-94% savings. Use gate_help for full docs.",
+    description:
+      "AST/structure file compression. Code: signature. YAML/MD: auto structure. See gate_help recommended_stack.",
     inputSchema: z.object({
       filePath: z
         .string()
         .describe("Absolute or relative path to the code file"),
       depth: z
-        .enum(["signature", "summary", "full"])
+        .enum(["signature", "summary", "structure", "full"])
         .optional()
         .default("signature")
         .describe(
-          "Compression depth: 'signature' (most compressed), 'summary' (moderate), 'full' (no compression)"
+          "signature (AST, default), structure (YAML/MD keys), summary (code only), full (raw)"
         ),
     }),
   },
@@ -119,7 +124,7 @@ server.registerTool(
   {
     title: "Gate Graph Query",
     description:
-      "Symbol graph (tree-sitter) + graphify-out map bridge. Use graphify_* queryTypes for communities/hubs; search falls back to GRAPH_REPORT.md when symbols miss. gate_help for docs.",
+      "Symbol graph + graphify map. graphify_map/search/hubs for communities. search auto-fallback. See gate_help recommended_stack.",
     inputSchema: z.object({
       query: z
         .string()
@@ -523,13 +528,73 @@ server.registerTool(
   }
 );
 
-// ─── Tool 10: gate_help ─────────────────────────────────────────────────────
+// ─── Tool 10: gate_init ─────────────────────────────────────────────────────
+
+server.registerTool(
+  "gate_init",
+  {
+    title: "Gate Init",
+    description:
+      "Project health: graphify map, dedup cache path, MCP slug hint. Run once per repo. See gate_help.",
+    inputSchema: z.object({
+      projectRoot: z
+        .string()
+        .optional()
+        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)"),
+    }),
+  },
+  async (args) => {
+    try {
+      const result = await handleGateInit({ projectRoot: args.projectRoot });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`gate_init failed: ${message}`);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool 11: gate_session_stats ────────────────────────────────────────────
+
+server.registerTool(
+  "gate_session_stats",
+  {
+    title: "Gate Session Stats",
+    description:
+      "Cumulative token savings from dedup cache (hits, entries). See gate_help recommended_stack.",
+    inputSchema: z.object({}),
+  },
+  async () => {
+    try {
+      const result = await handleSessionStats();
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`gate_session_stats failed: ${message}`);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool 12: gate_help ─────────────────────────────────────────────────────
 
 server.registerTool(
   "gate_help",
   {
     title: "Gate Help",
-    description: "Full docs for any Gate-MCP tool. Call with tool='<name>' or omit for directory.",
+    description:
+      "Full docs for any Gate-MCP tool. tool='recommended_stack' for navigation playbook; omit for directory.",
     inputSchema: z.object({
       tool: z
         .string()
@@ -586,7 +651,7 @@ process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info("Starting gatemcp server v0.5.2...");
+  logger.info(`Starting gatemcp server v${GATEMCP_VERSION}...`);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

@@ -47,7 +47,7 @@ export type ImageOptimizeResult = TextExtractedResult | VisualOptimizedResult;
 
 // ─── File Compression Types ─────────────────────────────────────────────────
 
-export type CompressionDepth = "signature" | "summary" | "full";
+export type CompressionDepth = "signature" | "summary" | "structure" | "full";
 
 export interface CompressFileInput {
   filePath: string;
@@ -89,12 +89,14 @@ export interface FileSignature {
 }
 
 export interface CompressFileResult {
-  type: "signature" | "summary" | "full";
+  type: "signature" | "summary" | "structure" | "full";
   content: string;
   language: string;
   originalTokens: number;
   optimizedTokens: number;
   savingsPercent: number;
+  /** True when optimized payload is larger than raw file (no fake savings). */
+  expanded?: boolean;
   note: string;
 }
 
@@ -171,6 +173,8 @@ export interface TokenMetrics {
   originalTokens: number;
   optimizedTokens: number;
   savingsPercent: number;
+  /** True when optimized payload exceeds raw input (never report fake savings). */
+  expanded: boolean;
 }
 
 // ─── Image Processor Interface ──────────────────────────────────────────────

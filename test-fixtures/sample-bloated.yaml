@@ -1,0 +1,15 @@
+# Bloated config for expansion-guard tests
+app:
+  name: gate-fixture
+  version: "0.5.5"
+database:
+  host: localhost
+  port: 5432
+  pool: 10
+features:
+  compression: true
+  graphify: true
+  dedup: true
+logging:
+  level: info
+  path: /var/log/gate.log
