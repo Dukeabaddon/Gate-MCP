@@ -4,6 +4,7 @@
 
 import fs from "node:fs";
 import { findGraphifyReport } from "./projectRoot.js";
+import { countTextTokens } from "./tokenCounter.js";
 
 export interface GraphifyHub {
   name: string;
@@ -22,6 +23,15 @@ export interface GraphifyParseResult {
   godNodes: GraphifyHub[];
   communityLines: string[];
   rawSummary: string;
+}
+
+/** Token count of full GRAPH_REPORT.md (baseline for graphify_map savings). */
+export function countGraphifyReportTokens(reportPath: string): number {
+  try {
+    return countTextTokens(fs.readFileSync(reportPath, "utf8"));
+  } catch {
+    return 0;
+  }
 }
 
 export function loadGraphifyReport(reportPath: string): GraphifyParseResult {

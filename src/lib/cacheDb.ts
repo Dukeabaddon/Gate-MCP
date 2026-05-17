@@ -202,7 +202,7 @@ function tryOpenSqlite(): SqlState | null {
       `SELECT COALESCE(SUM(hit_count), 0) AS s FROM cache_entries`
     );
     const stmtSumSavings = db.prepare(
-      `SELECT COALESCE(SUM(hit_count * (original_tokens - tokens)), 0) AS s
+      `SELECT COALESCE(SUM(hit_count * MAX(0, original_tokens - tokens)), 0) AS s
          FROM cache_entries`
     );
     const stmtSumBytes = db.prepare(
@@ -211,7 +211,7 @@ function tryOpenSqlite(): SqlState | null {
     const stmtList = db.prepare(
       `SELECT file_path AS filePath,
               hit_count AS hitCount,
-              (hit_count * (original_tokens - tokens)) AS tokensSaved,
+              (hit_count * MAX(0, original_tokens - tokens)) AS tokensSaved,
               updated_at AS updatedAt
          FROM cache_entries
          ORDER BY updated_at DESC`
@@ -383,7 +383,7 @@ export function getStats(): CacheStats {
   let totalHits = 0;
   let totalTokensSaved = 0;
   for (const row of s.map.values()) {
-    const saved = row.hitCount * (row.originalTokens - row.tokens);
+    const saved = row.hitCount * Math.max(0, row.originalTokens - row.tokens);
     totalHits += row.hitCount;
     totalTokensSaved += saved;
     entries.push({

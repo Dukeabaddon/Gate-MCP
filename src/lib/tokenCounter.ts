@@ -37,12 +37,14 @@ export function countTextTokens(text: string): number {
 
 /**
  * Calculate savings metrics from original and optimized token counts.
+ * Never reports positive savings when optimized > original.
  */
 export function calculateSavings(
   originalTokens: number,
   optimizedTokens: number
 ): TokenMetrics {
-  const savingsPercent =
+  const expanded = optimizedTokens > originalTokens;
+  const rawPercent =
     originalTokens > 0
       ? Math.round(((originalTokens - optimizedTokens) / originalTokens) * 100)
       : 0;
@@ -50,7 +52,26 @@ export function calculateSavings(
   return {
     originalTokens,
     optimizedTokens,
-    savingsPercent: Math.max(0, savingsPercent),
+    savingsPercent: expanded ? 0 : Math.max(0, rawPercent),
+    expanded,
   };
 }
-// Last reviewed: 2026-05-15 — verified against v0.3.2 fidelity test suite.
+
+/** Human-readable note for compress/graph tools. */
+export function formatSavingsNote(metrics: TokenMetrics, detail: string): string {
+  if (metrics.expanded) {
+    const extra = metrics.optimizedTokens - metrics.originalTokens;
+    const pct =
+      metrics.originalTokens > 0
+        ? Math.round((extra / metrics.originalTokens) * 100)
+        : 0;
+    return (
+      `Output expanded by ${extra} tokens (+${pct}%). ${detail} ` +
+      `Use depth=full only when raw bytes are required.`
+    );
+  }
+  if (metrics.savingsPercent > 0) {
+    return `${metrics.savingsPercent}% token savings. ${detail}`;
+  }
+  return detail;
+}

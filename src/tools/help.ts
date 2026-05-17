@@ -232,10 +232,51 @@ This tool. Returns full documentation for any Gate-MCP tool.
 
 ## Parameters
 - tool (optional): Tool name to get docs for. Omit for directory of all tools.
+  Special topic: tool='recommended_stack' for navigation playbook.
 
 ## When to use
 - When you need detailed parameter docs for a specific tool
 - When tool descriptions seem terse — this is the full reference`,
+
+  gate_init: `# gate_init
+Onboarding / health check for a project root.
+
+## Parameters
+- projectRoot (optional): defaults to cwd or GATE_PROJECT_ROOT
+
+## Returns
+- mcpSlugHint: Cursor may show server as user-gatemcp
+- graphify: report path, stale warning, workspace root for map queries
+- cache: dedup DB path and hit stats
+- recommendedProjectRoots: use SMC subfolder when graphify lives nested
+
+## When to use
+- First message in a new repo or after pulling graphify-out changes
+- Before graphify_map / compress_file on monorepos with nested graphify-out`,
+
+  recommended_stack: `# recommended_stack — Token-saving workflow
+
+## Layer order (do this before full Read)
+1. **gate_graph_query** queryType=graphify_map (or graphify_search) — repo communities + god nodes
+2. **gate_graph_query** queryType=search — symbol/file hits; auto-fallback to graphify when 0 symbol hits
+3. **gate_compress_file** depth=signature (code) or depth=structure (YAML/MD/config)
+4. **gate_dedup_context** — automatic on repeat reads; check action=stats or **gate_session_stats**
+5. **gate_clean_response** — shrink large JSON tool outputs (TOON)
+6. **Caveman** — Cursor user rules / .cursor/rules (output compression, not in gate binary)
+
+## projectRoot
+- Set projectRoot to the folder that contains graphify-out/ (may be a subfolder, not repo root)
+- AlgoTrading SMC example: crypto/strategies/active/smc
+
+## Anti-patterns
+- Do not use depth=summary on YAML/MD (inflates tokens) — use structure
+- Do not trust positive savingsPercent when expanded=true
+- graphify_map savings are vs full GRAPH_REPORT.md, not vs reading every source file
+
+## Quick commands
+- gate_help tool='gate_graph_query'
+- gate_session_stats — cumulative cache savings
+- gate_help tool='directory' — all tools`,
 };
 
 /**
@@ -247,22 +288,25 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
   // Directory mode — list all tools with one-line descriptions
   if (!tool || tool === "all" || tool === "directory") {
     const directory = [
-      "# gatemcp Tool Directory (v0.5.2)",
+      "# gatemcp Tool Directory (v0.5.5)",
       "",
       "| Tool | Purpose |",
       "|---|---|",
       "| gate_optimize_image | Compress images via OCR/downscale (76-97% savings) |",
-      "| gate_compress_file | AST code compression via tree-sitter (46-94% savings) |",
-      "| gate_graph_query | Symbol dependency graph with BFS (93-99% savings) |",
+      "| gate_compress_file | AST/structure compression (signature/structure/summary/full) |",
+      "| gate_graph_query | Symbol graph + graphify map (graphify_* queryTypes) |",
       "| gate_memory | Cross-session key-value persistence |",
       "| gate_dedup_context | SHA-256 session dedup cache (auto-integrated, SQLite-backed) |",
+      "| gate_init | Project health: graphify, cache path, MCP slug hint |",
+      "| gate_session_stats | Cumulative session token savings from dedup cache |",
       "| gate_clean_response | TOON JSON compressor (37-81% savings) |",
       "| gate_proxy_tools | Compressed catalog of downstream MCP servers (70-90% schema savings) |",
       "| gate_proxy_call | Forward a downstream MCP tool call through gatemcp's compressor |",
       "| gate_validate_compression | LLM-in-the-loop 0-100 quality score for a file's compressed view |",
-      "| gate_help | This tool — full docs for any tool |",
+      "| gate_help | Full docs; tool='recommended_stack' for navigation playbook |",
       "",
       "Use gate_help with tool='<name>' for full documentation.",
+      "Start with gate_help tool='recommended_stack' when onboarding a repo.",
     ].join("\n");
 
     const tokens = countTextTokens(directory);

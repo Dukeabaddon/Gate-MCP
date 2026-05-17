@@ -16,6 +16,12 @@ import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
 import { handleProxyTools, handleProxyCall } from "./tools/proxyTools.js";
 import { handleValidateCompression } from "./tools/validateCompression.js";
+import { handleSessionStats } from "./tools/sessionStats.js";
+import { handleGateInit } from "./tools/gateInit.js";
+import { GATEMCP_VERSION } from "./version.js";
+import { handleHelp } from "./tools/help.js";
+import { calculateSavings } from "./lib/tokenCounter.js";
+import { countGraphifyReportTokens } from "./lib/graphifyBridge.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb, isPersistent } from "./lib/cacheDb.js";
@@ -31,7 +37,7 @@ const INFO = "ℹ️";
 
 async function runTests(): Promise<void> {
   console.error(`\n${DIVIDER}`);
-  console.error("  gatemcp Test Suite v0.5.3");
+  console.error(`  gatemcp Test Suite v${GATEMCP_VERSION}`);
   console.error(DIVIDER);
 
   let passed = 0;
@@ -1094,6 +1100,106 @@ async function runTests(): Promise<void> {
     }
   } else {
     console.error(`\n${INFO} Test 34: skipped (AlgoTrading SMC graph not on this machine)`);
+  }
+
+  // ── Test 35: calculateSavings never fakes positive savings on expansion ──
+  console.error(`\n${INFO} Test 35: calculateSavings expansion guard`);
+  try {
+    const m = calculateSavings(100, 200);
+    if (m.expanded !== true || m.savingsPercent !== 0) {
+      throw new Error(`expected expanded=true savings=0, got ${JSON.stringify(m)}`);
+    }
+    console.error(`  ${PASS} expanded=${m.expanded} savingsPercent=${m.savingsPercent}`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 36: YAML structure mode (no fake savings on small config) ──
+  console.error(`\n${INFO} Test 36: YAML structure / signature guard`);
+  try {
+    const yamlPath = path.resolve(process.cwd(), "test-fixtures/sample-bloated.yaml");
+    const sig = await handleCompressFile({ filePath: yamlPath, depth: "signature" });
+    if (sig.expanded && sig.savingsPercent > 0) {
+      throw new Error("expanded YAML must not report positive savingsPercent");
+    }
+    const bigYaml = path.join(process.cwd(), ".gate-test-big.yaml");
+    const lines = Array.from({ length: 120 }, (_, i) => `key_${i}: value_${i}_padding`);
+    fs.writeFileSync(bigYaml, lines.join("\n"));
+    const big = await handleCompressFile({ filePath: bigYaml, depth: "signature" });
+    fs.unlinkSync(bigYaml);
+    if (big.savingsPercent > 0 && big.optimizedTokens > big.originalTokens) {
+      throw new Error("big YAML must not claim savings when larger than raw");
+    }
+    console.error(
+      `  ${PASS} small type=${sig.type} expanded=${sig.expanded}; big expanded=${big.expanded}`
+    );
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 37: graphify_map originalTokens from full report ──
+  console.error(`\n${INFO} Test 37: graphify_map report baseline tokens`);
+  try {
+    const report = findGraphifyReport(graphifyFixture);
+    if (!report) throw new Error("fixture report missing");
+    const reportTokens = countGraphifyReportTokens(report);
+    const map = await handleGraphQuery({
+      projectRoot: graphifyFixture,
+      query: "",
+      queryType: "graphify_map",
+    });
+    if (map.originalTokens !== reportTokens) {
+      throw new Error(
+        `originalTokens ${map.originalTokens} !== report file ${reportTokens}`
+      );
+    }
+    if (map.optimizedTokens >= map.originalTokens && map.originalTokens > 0) {
+      throw new Error("graphify_map should be smaller than full GRAPH_REPORT.md");
+    }
+    console.error(
+      `  ${PASS} ${map.originalTokens} → ${map.optimizedTokens} (${map.savingsPercent}% vs report)`
+    );
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 38: gate_session_stats + gate_help recommended_stack ──
+  console.error(`\n${INFO} Test 38: session_stats + recommended_stack help`);
+  try {
+    const stats = await handleSessionStats();
+    if (stats.version !== GATEMCP_VERSION) throw new Error(`version ${stats.version}`);
+    const help = await handleHelp({ tool: "recommended_stack" });
+    if (!help.documentation.includes("gate_graph_query")) {
+      throw new Error("recommended_stack missing gate_graph_query");
+    }
+    console.error(`  ${PASS} session_stats v${stats.version}; help ${help.tokens} tok`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 39: gate_init on gate-mcp repo ──
+  console.error(`\n${INFO} Test 39: gate_init health`);
+  try {
+    const init = await handleGateInit({ projectRoot: process.cwd() });
+    if (init.version !== GATEMCP_VERSION) throw new Error(`version ${init.version}`);
+    if (!init.mcpSlugHint.includes("user-gatemcp")) {
+      throw new Error("missing MCP slug hint");
+    }
+    console.error(
+      `  ${PASS} graphify=${init.graphify.found} cache=${init.cache.path}`
+    );
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
   }
 
   // ── Summary ──

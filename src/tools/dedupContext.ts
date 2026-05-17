@@ -138,7 +138,7 @@ export async function handleDedupContext(args: {
     if (cached && cached.hash === currentHash) {
       // Cache HIT — file unchanged since last read
       const updated = recordHit(absPath) ?? cached;
-      const savedThisHit = updated.originalTokens - updated.tokens;
+      const savedThisHit = Math.max(0, updated.originalTokens - updated.tokens);
 
       logger.info(
         `Cache HIT: ${absPath} (hit #${updated.hitCount}, saved ${savedThisHit} tokens)`
@@ -161,7 +161,10 @@ export async function handleDedupContext(args: {
             100
         ),
         content: updated.content,
-        note: `Cache hit #${updated.hitCount}. File unchanged (hash: ${currentHash}). Returning cached content. Saved ${savedThisHit} tokens this hit.`,
+        note:
+          savedThisHit > 0
+            ? `Cache hit #${updated.hitCount}. File unchanged (hash: ${currentHash}). Saved ~${savedThisHit} tokens this hit.`
+            : `Cache hit #${updated.hitCount}. File unchanged (hash: ${currentHash}). Cached view not smaller than raw file.`,
       };
     }
 
@@ -242,7 +245,7 @@ export function checkCache(filePath: string): CacheEntry | null {
     }
 
     const updated = recordHit(absPath) ?? cached;
-    const saved = updated.originalTokens - updated.tokens;
+    const saved = Math.max(0, updated.originalTokens - updated.tokens);
 
     logger.info(
       `Auto-cache HIT: ${absPath} (hit #${updated.hitCount}, saved ${saved} tokens)`

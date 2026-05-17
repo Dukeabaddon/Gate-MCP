@@ -9,9 +9,21 @@ import type {
   GraphQueryResponse,
   SymbolQueryType,
 } from "../lib/symbolGraph.js";
-import { queryGraphifyFromRoot } from "../lib/graphifyBridge.js";
-import { resolveCodeRoot, findGraphifyReport } from "../lib/projectRoot.js";
-import { countTextTokens } from "../lib/tokenCounter.js";
+import {
+  queryGraphifyFromRoot,
+  countGraphifyReportTokens,
+} from "../lib/graphifyBridge.js";
+import { graphifyStaleWarning } from "../lib/graphifyFreshness.js";
+import {
+  runGraphifyUpdate,
+  isGraphifyCliAvailable,
+} from "../lib/graphifyRunner.js";
+import {
+  resolveCodeRoot,
+  findGraphifyReport,
+  graphifyWorkspaceRoot,
+} from "../lib/projectRoot.js";
+import { countTextTokens, calculateSavings, formatSavingsNote } from "../lib/tokenCounter.js";
 import logger from "../lib/logger.js";
 
 export interface GraphQueryInput {
@@ -29,6 +41,7 @@ export interface GraphQueryResult {
   originalTokens: number;
   optimizedTokens: number;
   savingsPercent: number;
+  expanded?: boolean;
   indexedRoot: string;
   graphifyReport: string | null;
   source: "symbol" | "graphify" | "symbol+graphify";
@@ -41,6 +54,12 @@ const GRAPHIFY_TYPES = new Set<GraphQueryType>([
   "graphify_map",
 ]);
 
+function graphifyMetrics(reportPath: string | undefined, resultText: string) {
+  const originalTokens = reportPath ? countGraphifyReportTokens(reportPath) : 0;
+  const optimizedTokens = countTextTokens(resultText);
+  return calculateSavings(originalTokens, optimizedTokens);
+}
+
 export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQueryResult> {
   const {
     query,
@@ -49,12 +68,28 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
     rebuild = false,
   } = args;
 
+  const resolvedRoot = resolveCodeRoot(projectRoot);
+  let graphifyRebuildNote: string | null = null;
+
   if (rebuild) {
     invalidateGraph();
     logger.info("Graph cache invalidated by user request");
+
+    const reportForRebuild = findGraphifyReport(resolvedRoot);
+    if (reportForRebuild) {
+      const ws = graphifyWorkspaceRoot(reportForRebuild);
+      if (isGraphifyCliAvailable()) {
+        const upd = runGraphifyUpdate(ws);
+        graphifyRebuildNote = upd.ok
+          ? `Graphify: ${upd.message}`
+          : `Graphify rebuild skipped: ${upd.message}`;
+      } else {
+        graphifyRebuildNote =
+          "Graphify: CLI not on PATH — symbol graph rebuilt only. Install graphifyy for map refresh.";
+      }
+    }
   }
 
-  const resolvedRoot = resolveCodeRoot(projectRoot);
   const graphifyReport = findGraphifyReport(resolvedRoot);
 
   logger.info(
@@ -64,21 +99,39 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
   if (GRAPHIFY_TYPES.has(queryType)) {
     const mode = queryType as "graphify_hubs" | "graphify_search" | "graphify_map";
     const g = queryGraphifyFromRoot(resolvedRoot, query, mode);
-    const optimizedTokens = countTextTokens(g.result);
+    const reportPath = g.reportPath ?? graphifyReport ?? undefined;
+    const metrics = graphifyMetrics(reportPath, g.result);
+    const { originalTokens, optimizedTokens, savingsPercent, expanded } = metrics;
+
+    const stale = reportPath ? graphifyStaleWarning(resolvedRoot, reportPath) : null;
+    const savingsDetail =
+      reportPath && originalTokens > 0
+        ? `vs full GRAPH_REPORT.md (~${originalTokens} tok).`
+        : "Pair with gate_compress_file for file bodies.";
+
+    const baseNote = g.reportPath
+      ? `Graphify map from ${g.reportPath}. ${savingsDetail}`
+      : g.result.slice(0, 200);
+
+    const noteParts = [
+      formatSavingsNote(metrics, baseNote),
+      stale,
+      graphifyRebuildNote,
+    ].filter(Boolean);
+
     return {
       query,
       queryType,
       result: g.result,
       nodesTraversed: g.found ? 1 : 0,
-      originalTokens: 0,
+      originalTokens,
       optimizedTokens,
-      savingsPercent: 0,
+      savingsPercent,
+      expanded,
       indexedRoot: resolvedRoot,
-      graphifyReport: g.reportPath ?? graphifyReport,
+      graphifyReport: reportPath ?? null,
       source: "graphify",
-      note: g.reportPath
-        ? `Graphify map from ${g.reportPath}. Pair with gate_compress_file for file bodies.`
-        : g.result.slice(0, 200),
+      note: noteParts.join(" "),
     };
   }
 
@@ -106,22 +159,28 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
   }
 
   const optimizedTokens = countTextTokens(result);
-  const savingsPercent =
-    response.originalTokens > 0
-      ? Math.round(
-          ((response.originalTokens - optimizedTokens) / response.originalTokens) * 100
-        )
-      : response.savingsPercent;
+  const metrics = calculateSavings(response.originalTokens, optimizedTokens);
+  const savingsPercent = metrics.savingsPercent;
+
+  const stale = graphifyReport ? graphifyStaleWarning(resolvedRoot, graphifyReport) : null;
+
+  const rebuildSuffix = graphifyRebuildNote ? ` ${graphifyRebuildNote}` : "";
 
   const note =
     queryType === "stats"
       ? `Symbol graph: ${response.indexedRoot} (${response.nodesTraversed} nodes). ` +
-        (graphifyReport ? `Graphify: ${graphifyReport}.` : "No graphify-out found.")
-      : `Symbol query traversed ${nodesTraversed} node(s). ` +
-        `~${optimizedTokens} tok vs ~${response.originalTokens} raw estimate. ` +
-        (graphifyReport
-          ? `Graphify map: ${path.relative(resolvedRoot, graphifyReport) || graphifyReport}.`
-          : "Tip: run graphify update . for community map.");
+        (graphifyReport ? `Graphify: ${graphifyReport}.` : "No graphify-out found.") +
+        (stale ? ` ${stale}` : "") +
+        rebuildSuffix
+      : formatSavingsNote(
+          metrics,
+          `Symbol query traversed ${nodesTraversed} node(s). ` +
+            (graphifyReport
+              ? `Graphify map: ${path.relative(resolvedRoot, graphifyReport) || graphifyReport}.`
+              : "Tip: run graphify update . for community map.")
+        ) +
+        (stale ? ` ${stale}` : "") +
+        rebuildSuffix;
 
   return {
     query: response.query,
@@ -131,6 +190,7 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
     originalTokens: response.originalTokens,
     optimizedTokens,
     savingsPercent,
+    expanded: metrics.expanded,
     indexedRoot: response.indexedRoot,
     graphifyReport,
     source,
