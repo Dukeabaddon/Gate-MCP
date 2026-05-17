@@ -42,10 +42,22 @@ export interface SymbolGraph {
   fileCount: number;
 }
 
+export type SymbolQueryType =
+  | "depends_on"
+  | "dependents"
+  | "file_symbols"
+  | "search"
+  | "stats";
+
+export type GraphifyQueryType = "graphify_hubs" | "graphify_search" | "graphify_map";
+
+export type GraphQueryType = SymbolQueryType | GraphifyQueryType;
+
 export interface GraphQueryResponse {
   query: string;
-  queryType: "depends_on" | "dependents" | "file_symbols" | "search" | "stats";
+  queryType: GraphQueryType;
   result: string;
+  indexedRoot: string;
   nodesTraversed: number;
   originalTokens: number;
   optimizedTokens: number;
@@ -565,9 +577,10 @@ function formatTraversalResult(
 export function queryGraph(
   projectRoot: string,
   query: string,
-  queryType: "depends_on" | "dependents" | "file_symbols" | "search" | "stats" = "search"
+  queryType: SymbolQueryType = "search"
 ): GraphQueryResponse {
-  const graph = buildGraph(projectRoot);
+  const resolvedRoot = path.resolve(projectRoot);
+  const graph = buildGraph(resolvedRoot);
 
   // Estimate "what it would cost to read files raw"
   const avgTokensPerFile = 800;
@@ -665,7 +678,9 @@ export function queryGraph(
     default: {
       const matches = findNodes(graph, query);
       if (matches.length === 0) {
-        result = `No symbols matching "${query}" found in ${graph.fileCount} files.`;
+        result =
+          `No symbols matching "${query}" in ${graph.fileCount} files (root: ${resolvedRoot}). ` +
+          `For repo communities/hubs use queryType graphify_search or read graphify-out/GRAPH_REPORT.md.`;
         nodesTraversed = 0;
       } else {
         const lines: string[] = [];
@@ -697,6 +712,7 @@ export function queryGraph(
     query,
     queryType,
     result,
+    indexedRoot: resolvedRoot,
     nodesTraversed,
     originalTokens: naiveTokens,
     optimizedTokens,

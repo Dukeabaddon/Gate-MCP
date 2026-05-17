@@ -118,7 +118,8 @@ server.registerTool(
   "gate_graph_query",
   {
     title: "Gate Graph Query",
-    description: "Symbol dependency graph with BFS traversal. Find, trace, navigate code without reading files. 93-99% savings. Use gate_help for full docs.",
+    description:
+      "Symbol graph (tree-sitter) + graphify-out map bridge. Use graphify_* queryTypes for communities/hubs; search falls back to GRAPH_REPORT.md when symbols miss. gate_help for docs.",
     inputSchema: z.object({
       query: z
         .string()
@@ -128,13 +129,22 @@ server.registerTool(
         .optional()
         .describe("Project root directory (defaults to cwd)"),
       queryType: z
-        .enum(["depends_on", "dependents", "file_symbols", "search", "stats"])
+        .enum([
+          "depends_on",
+          "dependents",
+          "file_symbols",
+          "search",
+          "stats",
+          "graphify_hubs",
+          "graphify_search",
+          "graphify_map",
+        ])
         .optional()
         .default("search")
         .describe(
-          "'search' = find symbols by name, 'depends_on' = what does X import/use, " +
-          "'dependents' = what uses X, 'file_symbols' = list symbols in a file, " +
-          "'stats' = graph overview"
+          "Symbol: search | depends_on | dependents | file_symbols | stats. " +
+          "Graphify map (nested graphify-out/): graphify_hubs | graphify_search | graphify_map. " +
+          "search auto-fallback to graphify when 0 symbol hits."
         ),
       rebuild: z
         .boolean()

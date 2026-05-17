@@ -61,25 +61,26 @@ class definitions, imports, and type declarations — discarding implementation.
 - Auto-caches results (repeated reads are nearly free via gate_dedup_context)`,
 
   gate_graph_query: `# gate_graph_query
-In-memory symbol dependency graph built from tree-sitter ASTs.
-BFS traversal for dependency discovery without reading files.
+Two layers (use both):
+1. **Symbol graph** (tree-sitter) — imports, functions, classes in code files
+2. **Graphify bridge** — reads graphify-out/GRAPH_REPORT.md (communities, god nodes)
+
+Nested graphify (e.g. crypto/.../smc/graphify-out/) is auto-discovered by walking up from projectRoot/cwd.
 
 ## Parameters
-- query (required): Search term, filename, or symbol name
-- queryType (optional): 'search' | 'depends_on' | 'dependents' | 'file_symbols' | 'stats'
-  - 'search': Find symbols matching a string (fuzzy)
-  - 'depends_on': BFS traverse what a file/symbol depends on
-  - 'dependents': BFS traverse what depends on a file/symbol
-  - 'file_symbols': List all symbols in a specific file
-  - 'stats': Graph statistics (node count, edge count, build time)
-- projectRoot (optional): Project root directory
-- rebuild (optional): Force graph rebuild (default: uses cache)
+- query (required): Symbol name, file name, hub name, or community term
+- queryType (optional):
+  - Symbol: 'search' | 'depends_on' | 'dependents' | 'file_symbols' | 'stats'
+  - Graphify: 'graphify_hubs' | 'graphify_search' | 'graphify_map'
+  - 'search' with 0 symbol hits → auto appends graphify_search if GRAPH_REPORT.md exists
+- projectRoot (optional): Code index root (default: cwd or GATE_PROJECT_ROOT)
+- rebuild (optional): Force symbol graph rebuild
 
 ## When to use
-- BEFORE reading files — find what you need first
-- Understanding dependency chains without opening files
-- Typical savings: 93-99% vs reading all files
-- Scales to 6,000+ files (tested on VSCode repo)`,
+- Repo structure / communities → graphify_map or graphify_search
+- God nodes / architecture hubs → graphify_hubs
+- Code symbols / imports → search, depends_on, dependents
+- BEFORE reading files — graph first, then gate_compress_file for bodies`,
 
   gate_memory: `# gate_memory
 Cross-session key-value persistence (v0.5.2).
