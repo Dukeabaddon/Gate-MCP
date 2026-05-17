@@ -433,6 +433,19 @@ Core product scope is complete. Items below marked **done** ship in this repo; a
 ## Changelog
 
 <details>
+<summary><strong>v0.5.3</strong> — Graphify bridge for <code>gate_graph_query</code></summary>
+
+**Graphify integration.** `gate_graph_query` now reads nested `graphify-out/GRAPH_REPORT.md` (auto-discovered by walking up from `projectRoot` / cwd, including paths like `crypto/.../smc/graphify-out/`). New query types: `graphify_hubs`, `graphify_search`, `graphify_map`.
+
+**Fallback.** Symbol `search` with 0 hits appends graphify results when a report exists — fixes “0 hits” when agents query community/hub names.
+
+**Response metadata.** `indexedRoot`, `graphifyReport`, `source` (`symbol` | `graphify` | `symbol+graphify`) on tool results.
+
+**Tests.** 5 new unit tests (fixture + live AlgoTrading SMC when present). **35** total.
+
+</details>
+
+<details>
 <summary><strong>v0.5.2</strong> — SQLite-backed <code>gate_memory</code></summary>
 
 **Memory.** `gate_memory` now stores KV pairs in **`memory_entries`** inside the same `.gate-mcp/cache.db` as dedup (WAL, concurrent IDE-safe). If `better-sqlite3` is unavailable, behavior falls back to **`memory.json`**. Existing `memory.json` is imported once and renamed to `memory.json.migrated`.
@@ -460,6 +473,7 @@ Core product scope is complete. Items below marked **done** ship in this repo; a
 
 | Area | Behavior |
 |------|----------|
+| **gate graph vs graphify** | `gate_graph_query` symbol index (tree-sitter) ≠ `graphify-out/` community graph. Use `graphify_hubs` / `graphify_search` / `graphify_map` for GRAPH_REPORT.md; `search` auto-fallback when symbols miss. Nested paths (e.g. `crypto/.../smc/graphify-out/`) auto-discovered. |
 | **Graph savings %** | `gate_graph_query` compares result size to `fileCount × 800` tokens — a rough upper bound, not tokens actually read per query. Treat savings as directional, not exact billing. |
 | **Flow detection** | `.js` files with `@flow` / `@noflow` anywhere in the first 4KB route to the TSX grammar (heuristic; rare comment false positives possible). |
 | **Image auto mode** | OCR confidence 30–70% defaults to **visual** (resize), not text extraction — terminal screenshots may stay as images. |

@@ -10,6 +10,7 @@ import path from "node:path";
 import { handleOptimizeImage } from "./tools/optimizeImage.js";
 import { handleCompressFile } from "./tools/compressFile.js";
 import { handleGraphQuery } from "./tools/graphQuery.js";
+import { findGraphifyReport } from "./lib/projectRoot.js";
 import { handleMemory } from "./tools/memory.js";
 import { handleDedupContext } from "./tools/dedupContext.js";
 import { handleCleanResponse } from "./tools/cleanResponse.js";
@@ -30,7 +31,7 @@ const INFO = "ℹ️";
 
 async function runTests(): Promise<void> {
   console.error(`\n${DIVIDER}`);
-  console.error("  gatemcp Test Suite v0.5.2");
+  console.error("  gatemcp Test Suite v0.5.3");
   console.error(DIVIDER);
 
   let passed = 0;
@@ -988,6 +989,111 @@ async function runTests(): Promise<void> {
     console.error(
       `  ⏭️  Skipped — no test image found. Place test-image.png in project root.`
     );
+  }
+
+  // ── Test 30-33: graphify bridge ──
+  const graphifyFixture = path.resolve(
+    process.cwd(),
+    "test-fixtures/graphify-sample"
+  );
+
+  console.error(`\n${INFO} Test 30: findGraphifyReport (nested fixture)`);
+  try {
+    const report = findGraphifyReport(graphifyFixture);
+    if (report?.endsWith("GRAPH_REPORT.md")) {
+      console.error(`  ${PASS} Found: ${report}`);
+      passed++;
+    } else {
+      console.error(`  ${FAIL} Expected GRAPH_REPORT.md under fixture`);
+      failed++;
+    }
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  console.error(`\n${INFO} Test 31: graphify_hubs on fixture`);
+  try {
+    const result = await handleGraphQuery({
+      projectRoot: graphifyFixture,
+      query: "",
+      queryType: "graphify_hubs",
+    });
+    if (result.result.includes("OrderManager") && result.source === "graphify") {
+      console.error(`  ${PASS} Hubs include OrderManager`);
+      passed++;
+    } else {
+      console.error(`  ${FAIL} Missing OrderManager in hubs`);
+      failed++;
+    }
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  console.error(`\n${INFO} Test 32: graphify_search Community on fixture`);
+  try {
+    const result = await handleGraphQuery({
+      projectRoot: graphifyFixture,
+      query: "Community 0",
+      queryType: "graphify_search",
+    });
+    if (result.result.includes("Community")) {
+      console.error(`  ${PASS} Found community reference`);
+      passed++;
+    } else {
+      console.error(`  ${FAIL} Expected community hit`);
+      failed++;
+    }
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  console.error(`\n${INFO} Test 33: symbol search + graphify fallback (Community)`);
+  try {
+    const result = await handleGraphQuery({
+      projectRoot: graphifyFixture,
+      query: "Community",
+      queryType: "search",
+    });
+    if (
+      result.source === "symbol+graphify" &&
+      result.result.includes("graphify fallback")
+    ) {
+      console.error(`  ${PASS} Fallback appended (${result.source})`);
+      passed++;
+    } else {
+      console.error(`  ${FAIL} Expected symbol+graphify fallback, got ${result.source}`);
+      failed++;
+    }
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  const algoSmc = "/Users/macbookair/Documents/Visual Studio Code/Python/AlgoTrading/crypto/strategies/active/smc";
+  if (fs.existsSync(path.join(algoSmc, "graphify-out/GRAPH_REPORT.md"))) {
+    console.error(`\n${INFO} Test 34: AlgoTrading SMC graphify_search OrderManager`);
+    try {
+      const result = await handleGraphQuery({
+        projectRoot: algoSmc,
+        query: "OrderManager",
+        queryType: "graphify_search",
+      });
+      if (result.result.includes("OrderManager")) {
+        console.error(`  ${PASS} SMC graphify hit OrderManager`);
+        passed++;
+      } else {
+        console.error(`  ${FAIL} No OrderManager in SMC graphify`);
+        failed++;
+      }
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    }
+  } else {
+    console.error(`\n${INFO} Test 34: skipped (AlgoTrading SMC graph not on this machine)`);
   }
 
   // ── Summary ──
