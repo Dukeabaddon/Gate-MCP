@@ -84,7 +84,7 @@ gatemcp compresses at 5 layers of the MCP pipeline:
 
 **Layer 0 — Schema Compression:** Tool descriptions are terse one-liners. Full docs served on demand via `gate_help`.
 
-**Layer 1 — Code Navigation:** Instead of reading files (~2,000 tokens each), query a symbol dependency graph (~50 tokens per query). Built with tree-sitter AST.
+**Layer 1 — Code Navigation:** Symbol dependency graph (tree-sitter) plus optional **graphify-out** repo map (`graphify_hubs`, `graphify_search`, `graphify_map`). Symbol `search` auto-falls back to `GRAPH_REPORT.md` when there are zero symbol hits.
 
 **Layer 2 — Input Compression:** Files compressed to function signatures, imports, and class definitions across **23 languages** (see Language Support below). SHA-256 dedup prevents repeated reads — backed by a **persistent SQLite cache** (v0.4.0) at `.gate-mcp/cache.db` so hits survive across IDE restarts and concurrent IDEs.
 
@@ -96,15 +96,28 @@ gatemcp compresses at 5 layers of the MCP pipeline:
 
 | # | Tool | What It Does | Savings |
 |---|---|---|---|
-| 1 | `gate_optimize_image` | OCR text extraction or downscaling | 76–97% |
-| 2 | `gate_compress_file` | AST signature extraction (tree-sitter) | 46–94% |
-| 3 | `gate_graph_query` | Symbol dependency graph with BFS traversal | 93–99% |
-| 4 | `gate_memory` | Cross-session KV — **SQLite** in `.gate-mcp/cache.db` (JSON fallback) | — |
-| 5 | `gate_dedup_context` | SHA-256 content cache — **persistent** across sessions (v0.4.0, SQLite/WAL, in-memory fallback) | ~93% on rereads |
-| 6 | `gate_clean_response` | TOON JSON → pipe-delimited tables | 37–81% |
-| 7 | `gate_help` | Full documentation on demand | 46% schema overhead |
+| 1 | `gate_init` | Project health: graphify map path, dedup DB, MCP slug hint | — |
+| 2 | `gate_optimize_image` | OCR text extraction or downscaling | 76–97% |
+| 3 | `gate_compress_file` | AST signatures (code) or **structure** (YAML/MD/config) | 46–94% |
+| 4 | `gate_graph_query` | Symbol graph + **graphify** map (`graphify_map` / `graphify_search`) | 93–99% |
+| 5 | `gate_memory` | Cross-session KV — **SQLite** in `.gate-mcp/cache.db` (JSON fallback) | — |
+| 6 | `gate_dedup_context` | SHA-256 content cache — **persistent** (SQLite/WAL) | ~93% on rereads |
+| 7 | `gate_session_stats` | Cumulative dedup hits and tokens saved | — |
+| 8 | `gate_clean_response` | TOON JSON → pipe-delimited tables | 37–81% |
+| 9 | `gate_proxy_tools` / `gate_proxy_call` | Compress other MCP servers' schemas + responses | 70–90% |
+| 10 | `gate_validate_compression` | LLM-in-the-loop quality score (mock provider for CI) | — |
+| 11 | `gate_help` | Full docs on demand; `tool=recommended_stack` for workflow | 46% schema overhead |
 
-Every tool response includes `originalTokens`, `optimizedTokens`, and `savingsPercent`. No vague claims.
+Every tool response includes `originalTokens`, `optimizedTokens`, and `savingsPercent`. When compression **inflates** output, `expanded: true` and savings are **not** reported as positive (no fake “-56% savings”).
+
+**Recommended workflow** (monorepos with nested `graphify-out/`):
+
+1. `gate_init` — confirm graphify path and set `GATE_PROJECT_ROOT` if needed  
+2. `gate_graph_query` with `queryType: graphify_map` (map before full `Read`)  
+3. `gate_compress_file` with `depth: signature` (Python/TS) or `structure` (YAML/MD)  
+4. `gate_session_stats` — cumulative cache savings  
+
+Call `gate_help` with `tool: "recommended_stack"` for the full playbook.
 
 ## Language Support
 
@@ -141,6 +154,7 @@ Path-traversal protection: by default, tool calls are restricted to the current 
 | `GATE_ALLOW_ANY_PATH` | `0` | Set to `1` to disable boundary (NOT recommended) |
 | `GATE_MAX_FILES` | `5000` | Max files indexed by symbol graph (hard cap 50000) |
 | `GATE_CACHE_DB` | `<projectRoot>/.gate-mcp/cache.db` | Path to persistent dedup cache DB |
+| `GATE_GRAPHIFY_REPORT` | _(auto-discover)_ | Absolute path to `GRAPH_REPORT.md` if not under cwd |
 
 Sensitive paths (`~/.ssh`, `~/.aws/credentials`, `/etc/passwd`, etc) are blocked regardless of boundary.
 
@@ -206,13 +220,18 @@ After `npm install -g gatemcp`, add gatemcp to your IDE's MCP config. Click your
   "mcpServers": {
     "gatemcp": {
       "command": "npx",
-      "args": ["-y", "@gatemcp/cli"]
+      "args": ["-y", "@gatemcp/cli@0.5.5"],
+      "env": {
+        "GATE_PROJECT_ROOT": "/absolute/path/to/your/repo"
+      }
     }
   }
 }
 ```
 
-Restart Cursor. Open the MCP panel (Settings → Features → MCP Servers) to verify `gatemcp` is connected.
+In Cursor the server may appear as **`user-gatemcp`** (not `gatemcp`) — that is normal.
+
+Restart Cursor. Open the MCP panel (Settings → Features → MCP Servers) to verify the server is connected. Run **`gate_init`** once per workspace.
 </details>
 
 <details>
@@ -402,8 +421,11 @@ npm install --legacy-peer-deps
 # Build
 npm run build
 
-# Test (29 unit tests)
+# Test (40 unit tests)
 npm test
+
+# AlgoTrading / nested-graphify regression (optional)
+npm run validate:algo
 
 # Stress test (85 tests)
 npm run stress
@@ -431,6 +453,21 @@ Core product scope is complete. Items below marked **done** ship in this repo; a
 - ~~Tool-result cache~~ — archived (dedup + proxy TOON cover repeat reads; no separate store planned)
 
 ## Changelog
+
+<details open>
+<summary><strong>v0.5.5</strong> — Honest metrics, <code>gate_init</code>, YAML structure mode</summary>
+
+**Metrics.** `expanded: true` when compressed output is larger than raw; `savingsPercent` never fakes positive savings. Dedup stats clamp negative “tokens saved”. `graphify_map` sets `originalTokens` from full `GRAPH_REPORT.md`.
+
+**Compression.** `gate_compress_file` depth `structure` for YAML/Markdown/JSON; auto-structure for config files; summary on YAML redirects to structure (fixes inflated YAML “savings”).
+
+**New tools.** `gate_init` (health + graphify stale warning + cache path), `gate_session_stats` (cumulative dedup savings).
+
+**Graphify.** `rebuild=true` on `gate_graph_query` runs `graphify update .` when the graphify CLI is on PATH. Stale report warning when report commit ≠ `git HEAD`.
+
+**Tests.** 40 unit tests; `npm run validate:algo` for nested `graphify-out` layouts (e.g. AlgoTrading SMC).
+
+</details>
 
 <details>
 <summary><strong>v0.5.3</strong> — Graphify bridge for <code>gate_graph_query</code></summary>
@@ -473,8 +510,10 @@ Core product scope is complete. Items below marked **done** ship in this repo; a
 
 | Area | Behavior |
 |------|----------|
-| **gate graph vs graphify** | `gate_graph_query` symbol index (tree-sitter) ≠ `graphify-out/` community graph. Use `graphify_hubs` / `graphify_search` / `graphify_map` for GRAPH_REPORT.md; `search` auto-fallback when symbols miss. Nested paths (e.g. `crypto/.../smc/graphify-out/`) auto-discovered. |
-| **Graph savings %** | `gate_graph_query` compares result size to `fileCount × 800` tokens — a rough upper bound, not tokens actually read per query. Treat savings as directional, not exact billing. |
+| **gate graph vs graphify** | Symbol index (tree-sitter) ≠ `graphify-out/` community graph. Use `graphify_*` query types for map/hubs; symbol `search` auto-fallback when 0 hits. Nested `graphify-out/` (e.g. `crypto/.../smc/`) auto-discovered. |
+| **Graph savings %** | Symbol queries: rough `fileCount × 800` upper bound. **graphify_map**: baseline is full `GRAPH_REPORT.md` token count — comparable to reading the report file. |
+| **Cursor MCP name** | Server may show as `user-gatemcp`; use `gate_init` / `gate_help` to confirm wiring. |
+| **YAML / config** | Use `depth: structure` (or default signature on `.yaml`) — avoid `summary` on config files. |
 | **Flow detection** | `.js` files with `@flow` / `@noflow` anywhere in the first 4KB route to the TSX grammar (heuristic; rare comment false positives possible). |
 | **Image auto mode** | OCR confidence 30–70% defaults to **visual** (resize), not text extraction — terminal screenshots may stay as images. |
 | **Memory fallback** | Without `better-sqlite3`, `gate_memory` uses `.gate-mcp/memory.json` (no cross-IDE WAL). Install optional dep or use same machine build for SQLite path. |
