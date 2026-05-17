@@ -44,6 +44,8 @@ vendor/
 
 # Graphify output (regenerable via `graphify update .`)
 graphify-out/
+!test-fixtures/**/graphify-out/
+!test-fixtures/**/graphify-out/**
 
 # Internal docs — kept locally, not published to the public repo
 docs/
