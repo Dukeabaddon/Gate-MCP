@@ -49,4 +49,15 @@ graphify-out/
 docs/
 documentation/
 
-# Last reviewed: 2026-05-16 — docs/ and documentation/ excluded from public repo.
+# Video / pitch scripts (local only — not for public repo)
+DEMO_SCRIPT.md
+DEMO_SCRIPT.*.md
+
+# One-off dev / FAIROS experiment scripts (not part of the shipped product)
+src/exp2-semantic.ts
+src/exp3-toon.ts
+src/measure-schemas.ts
+src/scale-test.ts
+src/scripts/cursor-llm-test.ts
+
+# Last reviewed: 2026-05-17 — public repo = product + tests + documented scripts only.
