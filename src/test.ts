@@ -25,6 +25,8 @@ import { countGraphifyReportTokens } from "./lib/graphifyBridge.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb, isPersistent } from "./lib/cacheDb.js";
+import { _resetSessionMeasurementsForTests } from "./lib/sessionMetrics.js";
+import { runDoctor } from "./doctor.js";
 import {
   isMemoryPersistent,
   _resetMemoryDbForTests,
@@ -569,6 +571,7 @@ async function runTests(): Promise<void> {
   }
 
   if (proxyTestsRan) {
+    process.env.GATE_ENABLE_PROXY = "1";
     // ── Test 18: empty config returns empty servers list ──
     console.error(`\n${INFO} Test 18: gate_proxy_tools (no config → empty)`);
     try {
@@ -805,6 +808,7 @@ async function runTests(): Promise<void> {
     } catch (err) {
       console.error(`${INFO} proxy cleanup warning: ${err}`);
     }
+    delete process.env.GATE_ENABLE_PROXY;
     try {
       fs.rmSync(proxyRoot, { recursive: true, force: true });
     } catch {
@@ -966,35 +970,40 @@ async function runTests(): Promise<void> {
     failed++;
   }
 
-  // ── Test 29: gate_optimize_image (skip if no test image) ──
+  // ── Test 29: gate_optimize_image with generated deterministic fixture ──
   console.error(`\n${INFO} Test 29: gate_optimize_image`);
-  const testImagePaths = [
-    path.resolve(process.cwd(), "test-image.png"),
-    path.resolve(process.cwd(), "test-image.jpg"),
-    path.join(process.env.HOME || "~", "Desktop/test-screenshot.png"),
-  ];
-  const testImage = testImagePaths.find((p) => fs.existsSync(p));
-
-  if (testImage) {
-    try {
-      const result = await handleOptimizeImage({
-        imagePath: testImage,
-        intent: "auto",
-      });
-      console.error(`  ${PASS} type: ${result.type}`);
-      console.error(`  ${PASS} originalTokens: ${result.originalTokens}`);
-      console.error(`  ${PASS} optimizedTokens: ${result.optimizedTokens}`);
-      console.error(`  ${PASS} savingsPercent: ${result.savingsPercent}%`);
-      console.error(`  ${PASS} note: ${result.note}`);
-      passed++;
-    } catch (err) {
-      console.error(`  ${FAIL} Error: ${err}`);
-      failed++;
-    }
-  } else {
-    console.error(
-      `  ⏭️  Skipped — no test image found. Place test-image.png in project root.`
+  const testImage = path.resolve(process.cwd(), "test-image.png");
+  try {
+    const sharp = (await import("sharp")).default;
+    const svg = Buffer.from(
+      `<svg width="900" height="360" xmlns="http://www.w3.org/2000/svg">` +
+        `<rect width="100%" height="100%" fill="white"/>` +
+        `<text x="50" y="190" font-size="72" fill="black">Gate MCP production test</text>` +
+        `</svg>`
     );
+    await sharp(svg).png().toFile(testImage);
+
+    const result = await handleOptimizeImage({
+      imagePath: testImage,
+      intent: "visual",
+    });
+    if (result.type !== "visual_optimized") {
+      throw new Error(`expected visual_optimized, got ${result.type}`);
+    }
+    if (!fs.existsSync(result.imagePath)) {
+      throw new Error(`optimized image missing: ${result.imagePath}`);
+    }
+    console.error(`  ${PASS} type: ${result.type}`);
+    console.error(`  ${PASS} originalTokens: ${result.originalTokens}`);
+    console.error(`  ${PASS} optimizedTokens: ${result.optimizedTokens}`);
+    console.error(`  ${PASS} savingsPercent: ${result.savingsPercent}%`);
+    console.error(`  ${PASS} note: ${result.note}`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  } finally {
+    fs.rmSync(testImage, { force: true });
   }
 
   // ── Test 30-33: graphify bridge ──
@@ -1172,13 +1181,36 @@ async function runTests(): Promise<void> {
   // ── Test 38: gate_session_stats + gate_help recommended_stack ──
   console.error(`\n${INFO} Test 38: session_stats + recommended_stack help`);
   try {
+    await handleDedupContext({ action: "clear" });
+    _resetSessionMeasurementsForTests();
+    const metricsTarget = path.resolve(process.cwd(), "src/lib/tokenCounter.ts");
+    await handleCompressFile({ filePath: metricsTarget, depth: "signature" });
+    await handleCompressFile({ filePath: metricsTarget, depth: "signature" });
     const stats = await handleSessionStats();
     if (stats.version !== GATEMCP_VERSION) throw new Error(`version ${stats.version}`);
+    if (
+      stats.files_considered !== 2 ||
+      stats.files_compressed !== 1 ||
+      stats.cache_hits !== 1
+    ) {
+      throw new Error(
+        `unexpected measured counts: ${stats.files_considered}/${stats.files_compressed}/${stats.cache_hits}`
+      );
+    }
+    if (
+      stats.input_bytes <= 0 ||
+      stats.output_bytes <= 0 ||
+      stats.estimated_tokens_before <= stats.estimated_tokens_after
+    ) {
+      throw new Error("measured byte/token totals are missing or invalid");
+    }
     const help = await handleHelp({ tool: "recommended_stack" });
     if (!help.documentation.includes("gate_graph_query")) {
       throw new Error("recommended_stack missing gate_graph_query");
     }
-    console.error(`  ${PASS} session_stats v${stats.version}; help ${help.tokens} tok`);
+    console.error(
+      `  ${PASS} measured 2 considered / 1 compressed / 1 cache hit; help ${help.tokens} tok`
+    );
     passed++;
   } catch (err) {
     console.error(`  ${FAIL} Error: ${err}`);
@@ -1193,8 +1225,74 @@ async function runTests(): Promise<void> {
     if (!init.mcpSlugHint.includes("user-gatemcp")) {
       throw new Error("missing MCP slug hint");
     }
+    if (!init.cache.path.startsWith(process.cwd())) {
+      throw new Error(`cache path escaped project root: ${init.cache.path}`);
+    }
     console.error(
       `  ${PASS} graphify=${init.graphify.found} cache=${init.cache.path}`
+    );
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 40: Codex plugin package ──
+  console.error(`\n${INFO} Test 40: Codex plugin manifest + MCP command`);
+  try {
+    const pluginRoot = path.resolve(process.cwd(), "plugins/gatemcp");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginRoot, ".codex-plugin", "plugin.json"), "utf8")
+    ) as { name?: string; mcpServers?: string };
+    const mcp = JSON.parse(
+      fs.readFileSync(path.join(pluginRoot, ".mcp.json"), "utf8")
+    ) as { mcpServers?: { gatemcp?: { command?: string; args?: string[] } } };
+    const config = mcp.mcpServers?.gatemcp;
+    if (manifest.name !== "gatemcp" || manifest.mcpServers !== "./.mcp.json") {
+      throw new Error("plugin manifest identity or mcpServers path is invalid");
+    }
+    if (
+      config?.command !== "npm" ||
+      config.args?.[0] !== "exec" ||
+      !config.args.includes("--strict-allow-scripts") ||
+      !config.args
+        .find((arg) => arg.startsWith("--allow-scripts="))
+        ?.includes("better-sqlite3") ||
+      !config.args.includes("--package=@gatemcp/cli@0.5.5") ||
+      config.args.slice(-2).join(" ") !== "-- gatemcp"
+    ) {
+      throw new Error("plugin server command is not an explicit pinned npm exec");
+    }
+    console.error(`  ${PASS} plugin manifest and pinned MCP command are valid`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 41: gatemcp doctor MCP handshake + required tools ──
+  console.error(`\n${INFO} Test 41: gatemcp doctor end-to-end smoke`);
+  try {
+    const report = await runDoctor({
+      projectRoot: process.cwd(),
+      serverEntrypoint: path.resolve(process.cwd(), "dist/main.js"),
+      strict: true,
+    });
+    if (!report.ok) {
+      throw new Error(
+        report.checks
+          .filter((check) => check.status === "fail")
+          .map((check) => `${check.name}: ${check.detail}`)
+          .join("; ")
+      );
+    }
+    for (const tool of report.expectedTools) {
+      if (!report.discoveredTools.includes(tool)) {
+        throw new Error(`doctor did not discover ${tool}`);
+      }
+    }
+    console.error(
+      `  ${PASS} MCP initialized; ${report.discoveredTools.length} tools discovered`
     );
     passed++;
   } catch (err) {

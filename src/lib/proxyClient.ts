@@ -27,6 +27,8 @@ import type {
 } from "@modelcontextprotocol/sdk/types.js";
 import fs from "node:fs";
 import path from "node:path";
+import { resolveCodeRoot } from "./projectRoot.js";
+import { safeResolve } from "./pathGuard.js";
 import logger from "./logger.js";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -50,6 +52,9 @@ export interface ProxyConfig {
 }
 
 interface LiveConnection {
+  key: string;
+  serverName: string;
+  projectRoot: string;
   client: Client;
   transport: StdioClientTransport;
   tools?: ListToolsResult["tools"];
@@ -64,18 +69,41 @@ const connections = new Map<string, LiveConnection>();
 /** In-flight connection attempts (prevents double-spawn races). */
 const pendingConnects = new Map<string, Promise<LiveConnection>>();
 
+function proxyConnectionKey(projectRoot: string, serverName: string): string {
+  return JSON.stringify([projectRoot, serverName]);
+}
+
+export function isProxyExecutionEnabled(): boolean {
+  return process.env.GATE_ENABLE_PROXY === "1";
+}
+
+function assertProxyExecutionEnabled(): void {
+  if (!isProxyExecutionEnabled()) {
+    throw new Error(
+      "Proxy execution is disabled by default. Set GATE_ENABLE_PROXY=1 in the " +
+        "Gate MCP server environment only after reviewing proxy-servers.json."
+    );
+  }
+}
+
 // ─── Config loading ─────────────────────────────────────────────────────────
 
 /**
  * Resolve the path to the proxy config file. Honors GATE_PROXY_CONFIG override.
  */
 export function getProxyConfigPath(projectRoot?: string): string {
+  const root = resolveCodeRoot(projectRoot);
   const override = process.env.GATE_PROXY_CONFIG;
   if (override && override.length > 0) {
-    return path.resolve(override);
+    return safeResolve(override, {
+      projectRoot: root,
+      caller: "getProxyConfigPath",
+    });
   }
-  const root = projectRoot ?? process.env.GATE_PROJECT_ROOT ?? process.cwd();
-  return path.join(root, ".gate-mcp", "proxy-servers.json");
+  return safeResolve(path.join(root, ".gate-mcp", "proxy-servers.json"), {
+    projectRoot: root,
+    caller: "getProxyConfigPath",
+  });
 }
 
 /**
@@ -154,35 +182,43 @@ export async function getProxyConnection(
   serverName: string,
   projectRoot?: string
 ): Promise<LiveConnection> {
-  const existing = connections.get(serverName);
+  assertProxyExecutionEnabled();
+  // Validate and canonicalize the caller's root before consulting connection
+  // state. Otherwise an invalid root could reuse a process opened for another
+  // project that happened to use the same server name.
+  const root = resolveCodeRoot(projectRoot);
+  const key = proxyConnectionKey(root, serverName);
+  const existing = connections.get(key);
   if (existing) return existing;
-  const pending = pendingConnects.get(serverName);
+  const pending = pendingConnects.get(key);
   if (pending) return pending;
 
-  const config = loadProxyConfig(projectRoot);
+  const config = loadProxyConfig(root);
   const serverCfg = config.servers[serverName];
   if (!serverCfg) {
     throw new Error(
       `Proxy server "${serverName}" not found in proxy config. ` +
-        `Add it under "servers" in ${getProxyConfigPath(projectRoot)}.`
+        `Add it under "servers" in ${getProxyConfigPath(root)}.`
     );
   }
   if (serverCfg.disabled) {
     throw new Error(`Proxy server "${serverName}" is marked disabled in config`);
   }
 
-  const promise = spawnAndConnect(serverName, serverCfg);
-  pendingConnects.set(serverName, promise);
+  const promise = spawnAndConnect(key, root, serverName, serverCfg);
+  pendingConnects.set(key, promise);
   try {
     const conn = await promise;
-    connections.set(serverName, conn);
+    connections.set(key, conn);
     return conn;
   } finally {
-    pendingConnects.delete(serverName);
+    pendingConnects.delete(key);
   }
 }
 
 async function spawnAndConnect(
+  key: string,
+  projectRoot: string,
   serverName: string,
   cfg: ProxyServerConfig
 ): Promise<LiveConnection> {
@@ -231,7 +267,14 @@ async function spawnAndConnect(
   logger.info(
     `[proxy] connected to "${serverName}" in ${Date.now() - startedAt}ms`
   );
-  return { client, transport, connectedAt: Date.now() };
+  return {
+    key,
+    serverName,
+    projectRoot,
+    client,
+    transport,
+    connectedAt: Date.now(),
+  };
 }
 
 /**
@@ -323,8 +366,8 @@ export async function callProxyTool(
       // Capture the connection ref BEFORE removing from the live pool so we
       // can still call close() on the spawned child. Removal first means
       // concurrent callers won't grab the wedged connection while cleanup runs.
-      const wedged = connections.get(serverName);
-      connections.delete(serverName);
+      const wedged = connections.get(conn.key);
+      connections.delete(conn.key);
       if (wedged) {
         void Promise.allSettled([
           wedged.client.close(),
@@ -350,20 +393,32 @@ export async function callProxyTool(
  * Close a single downstream connection. Safe to call on a server that was
  * never connected (no-op).
  */
-export async function closeProxyConnection(serverName: string): Promise<void> {
-  const conn = connections.get(serverName);
+async function closeProxyConnectionByKey(key: string): Promise<void> {
+  const conn = connections.get(key);
   if (!conn) return;
-  connections.delete(serverName);
+  connections.delete(key);
   try {
     await conn.client.close();
   } catch (err) {
-    logger.warn(`[proxy] error closing client "${serverName}": ${err}`);
+    logger.warn(`[proxy] error closing client "${conn.serverName}": ${err}`);
   }
   try {
     await conn.transport.close();
   } catch (err) {
-    logger.warn(`[proxy] error closing transport "${serverName}": ${err}`);
+    logger.warn(`[proxy] error closing transport "${conn.serverName}": ${err}`);
   }
+}
+
+export async function closeProxyConnection(
+  serverName: string,
+  projectRoot?: string
+): Promise<void> {
+  const keys = projectRoot !== undefined
+    ? [proxyConnectionKey(resolveCodeRoot(projectRoot), serverName)]
+    : Array.from(connections.entries())
+        .filter(([, conn]) => conn.serverName === serverName)
+        .map(([key]) => key);
+  await Promise.all(keys.map((key) => closeProxyConnectionByKey(key)));
 }
 
 /**
@@ -371,10 +426,10 @@ export async function closeProxyConnection(serverName: string): Promise<void> {
  * shutdown so we don't leave orphaned child processes when gatemcp exits.
  */
 export async function closeAllProxies(): Promise<void> {
-  const names = Array.from(connections.keys());
-  if (names.length === 0) return;
-  logger.info(`[proxy] closing ${names.length} downstream connection(s)`);
-  await Promise.all(names.map((name) => closeProxyConnection(name)));
+  const keys = Array.from(connections.keys());
+  if (keys.length === 0) return;
+  logger.info(`[proxy] closing ${keys.length} downstream connection(s)`);
+  await Promise.all(keys.map((key) => closeProxyConnectionByKey(key)));
 }
 
 /**
@@ -383,11 +438,13 @@ export async function closeAllProxies(): Promise<void> {
  */
 export function getProxyStatus(): Array<{
   server: string;
+  projectRoot: string;
   connectedAt: number;
   toolsCached: number;
 }> {
-  return Array.from(connections.entries()).map(([server, conn]) => ({
-    server,
+  return Array.from(connections.values()).map((conn) => ({
+    server: conn.serverName,
+    projectRoot: conn.projectRoot,
     connectedAt: conn.connectedAt,
     toolsCached: conn.tools?.length ?? 0,
   }));

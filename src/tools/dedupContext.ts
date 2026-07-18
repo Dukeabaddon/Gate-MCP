@@ -1,7 +1,10 @@
 /**
  * Gate Dedup Context — Cross-Session Content Deduplication (v0.4.0)
  *
- * Achieves ~93% savings on repeated file/image reads. The cache is backed by
+ * Avoids repeated compression work for unchanged files. Explicit `check`
+ * calls return a small reference-only result; `gate_compress_file` still
+ * returns the cached compressed content when the caller needs to read it.
+ * The cache is backed by
  * SQLite (via better-sqlite3) and persists across MCP server restarts and
  * across concurrent IDE sessions. When better-sqlite3 is unavailable, the
  * cache transparently degrades to an in-memory Map with identical API.
@@ -26,8 +29,14 @@ import {
   clearAll,
   getStats,
   isPersistent,
+  COMPRESSOR_CACHE_VERSION,
+  CACHE_SCHEMA_VERSION,
+  type CacheIdentity,
   type CacheEntryRow,
 } from "../lib/cacheDb.js";
+import type { CompressionDepth } from "../types.js";
+import { detectLanguage } from "../lib/astParser.js";
+import { safeResolveExistingFile } from "../lib/pathGuard.js";
 
 /**
  * Backwards-compatible CacheEntry shape returned to the rest of the codebase.
@@ -42,6 +51,9 @@ export interface CacheEntry {
   hitCount: number;
   filePath: string;
   type: "file" | "image";
+  depth: string;
+  language: string;
+  compressorVersion: string;
 }
 
 interface DedupResult {
@@ -67,6 +79,41 @@ interface DedupResult {
   }>;
 }
 
+/**
+ * Reconcile response token fields with the response that is actually returned.
+ * The token count includes its own numeric fields, so iterate to a fixed point.
+ */
+function withMeasuredPayload(result: DedupResult): DedupResult {
+  if (!result.originalTokens) return result;
+
+  let measured = result.dedupTokens ?? 0;
+  for (let i = 0; i < 8; i += 1) {
+    result.dedupTokens = measured;
+    result.savingsPercent = Math.max(
+      0,
+      Math.round(
+        ((result.originalTokens - measured) /
+          Math.max(result.originalTokens, 1)) *
+          100
+      )
+    );
+    const next = countTextTokens(JSON.stringify(result));
+    if (next === measured) return result;
+    measured = next;
+  }
+
+  result.dedupTokens = countTextTokens(JSON.stringify(result));
+  result.savingsPercent = Math.max(
+    0,
+    Math.round(
+      ((result.originalTokens - result.dedupTokens) /
+        Math.max(result.originalTokens, 1)) *
+        100
+    )
+  );
+  return result;
+}
+
 function computeFileHash(filePath: string): string {
   const content = fs.readFileSync(filePath);
   return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
@@ -82,6 +129,23 @@ function toLegacyEntry(row: CacheEntryRow): CacheEntry {
     hitCount: row.hitCount,
     filePath: row.filePath,
     type: row.type,
+    depth: row.depth,
+    language: row.language,
+    compressorVersion: row.compressorVersion,
+  };
+}
+
+function compressionIdentity(
+  hash: string,
+  depth: string,
+  language: string
+): CacheIdentity {
+  return {
+    hash,
+    depth,
+    language,
+    compressorVersion: COMPRESSOR_CACHE_VERSION,
+    schemaVersion: CACHE_SCHEMA_VERSION,
   };
 }
 
@@ -106,7 +170,7 @@ export async function handleDedupContext(args: {
       totalHits: stats.totalHits,
       totalTokensSaved: stats.totalTokensSaved,
       entries: stats.entries,
-      note: `${backend} cache: ${stats.totalEntries} entries, ${stats.totalHits} hits, ${stats.totalTokensSaved} tokens saved.`,
+      note: `${backend} cache: ${stats.totalEntries} entries, ${stats.totalHits} hits, ${stats.totalTokensSaved} raw-vs-cached-view tokens avoided. Cache hits also avoid recompression work.`,
     };
   }
 
@@ -127,51 +191,45 @@ export async function handleDedupContext(args: {
   if (action === "check") {
     if (!args.filePath) throw new Error("filePath required for 'check' action");
 
-    const absPath = fs.realpathSync(args.filePath);
-    if (!fs.existsSync(absPath)) {
-      throw new Error(`File not found: ${args.filePath}`);
-    }
+    const absPath = safeResolveExistingFile(args.filePath, {
+      caller: "gate_dedup_context",
+    });
 
     const currentHash = computeFileHash(absPath);
-    const cached = getEntry(absPath);
+    const language = detectLanguage(absPath);
+    const identity = compressionIdentity(currentHash, "explicit", language);
+    const cached = getEntry(absPath, identity);
 
     if (cached && cached.hash === currentHash) {
       // Cache HIT — file unchanged since last read
-      const updated = recordHit(absPath) ?? cached;
+      const updated = recordHit(absPath, identity) ?? cached;
       const savedThisHit = Math.max(0, updated.originalTokens - updated.tokens);
 
       logger.info(
         `Cache HIT: ${absPath} (hit #${updated.hitCount}, saved ${savedThisHit} tokens)`
       );
 
-      const stubTokens = countTextTokens(
-        `[cached] ${updated.filePath} unchanged. ${updated.tokens} tokens.`
-      );
-
-      return {
+      return withMeasuredPayload({
         status: "cache_hit",
         filePath: absPath,
         hash: currentHash,
         cached: true,
         hitCount: updated.hitCount,
         originalTokens: updated.originalTokens,
-        dedupTokens: stubTokens,
-        savingsPercent: Math.round(
-          ((updated.originalTokens - stubTokens) / Math.max(updated.originalTokens, 1)) *
-            100
-        ),
-        content: updated.content,
+        dedupTokens: 0,
+        savingsPercent: 0,
         note:
           savedThisHit > 0
-            ? `Cache hit #${updated.hitCount}. File unchanged (hash: ${currentHash}). Saved ~${savedThisHit} tokens this hit.`
-            : `Cache hit #${updated.hitCount}. File unchanged (hash: ${currentHash}). Cached view not smaller than raw file.`,
-      };
+            ? `Cache hit #${updated.hitCount}. File unchanged (hash: ${currentHash}). Reference-only response; call gate_compress_file when cached content is required.`
+            : `Cache hit #${updated.hitCount}. File unchanged (hash: ${currentHash}). Cached view is not smaller than raw content.`,
+      });
     }
 
-    if (cached && cached.hash !== currentHash) {
+    const latest = cached ?? getEntry(absPath);
+    if (latest && latest.hash !== currentHash) {
       // Cache STALE — file changed since last read
       logger.info(
-        `Cache STALE: ${absPath} (old hash: ${cached.hash}, new: ${currentHash})`
+        `Cache STALE: ${absPath} (old hash: ${latest.hash}, new: ${currentHash})`
       );
       deleteEntry(absPath);
       return {
@@ -179,7 +237,7 @@ export async function handleDedupContext(args: {
         filePath: absPath,
         hash: currentHash,
         cached: false,
-        note: `File changed since last read (old: ${cached.hash}, new: ${currentHash}). Cache invalidated. Re-read with gate_compress_file.`,
+        note: `File changed since last read (old: ${latest.hash}, new: ${currentHash}). Cache invalidated. Re-read with gate_compress_file.`,
       };
     }
 
@@ -197,10 +255,13 @@ export async function handleDedupContext(args: {
     if (!args.filePath) throw new Error("filePath required for 'store' action");
     if (!args.content) throw new Error("content required for 'store' action");
 
-    const absPath = fs.realpathSync(args.filePath);
+    const absPath = safeResolveExistingFile(args.filePath, {
+      caller: "gate_dedup_context",
+    });
     const hash = computeFileHash(absPath);
     const tokens = countTextTokens(args.content);
     const originalTokens = args.originalTokens ?? tokens;
+    const language = detectLanguage(absPath);
 
     putEntry({
       filePath: absPath,
@@ -209,6 +270,10 @@ export async function handleDedupContext(args: {
       tokens,
       originalTokens,
       type: args.type ?? "file",
+      depth: "explicit",
+      language,
+      compressorVersion: COMPRESSOR_CACHE_VERSION,
+      schemaVersion: CACHE_SCHEMA_VERSION,
     });
 
     logger.info(`Cached: ${absPath} (${tokens} tokens, hash: ${hash})`);
@@ -221,7 +286,7 @@ export async function handleDedupContext(args: {
       originalTokens,
       dedupTokens: tokens,
       savingsPercent: 0,
-      note: `Stored in ${isPersistent() ? "persistent" : "in-memory"} cache. Future reads of this unchanged file will cost ~15 tokens instead of ${tokens}.`,
+      note: `Stored in ${isPersistent() ? "persistent" : "in-memory"} cache. Explicit checks return a measured reference-only response; gate_compress_file returns the full cached view.`,
     };
   }
 
@@ -232,19 +297,29 @@ export async function handleDedupContext(args: {
 // These functions let gate_compress_file integrate with the dedup cache
 // automatically, without requiring the AI to call two tools.
 
-export function checkCache(filePath: string): CacheEntry | null {
+export function checkCache(
+  filePath: string,
+  depth: CompressionDepth,
+  language: string
+): CacheEntry | null {
   try {
-    const absPath = fs.realpathSync(filePath);
-    const cached = getEntry(absPath);
-    if (!cached) return null;
-
+    const absPath = safeResolveExistingFile(filePath, {
+      caller: "gate_dedup_context:auto-check",
+    });
     const currentHash = computeFileHash(absPath);
+    const identity = compressionIdentity(currentHash, depth, language);
+    const cached = getEntry(absPath, identity);
+    if (!cached) {
+      const latest = getEntry(absPath);
+      if (latest && latest.hash !== currentHash) deleteEntry(absPath);
+      return null;
+    }
     if (cached.hash !== currentHash) {
       deleteEntry(absPath);
       return null;
     }
 
-    const updated = recordHit(absPath) ?? cached;
+    const updated = recordHit(absPath, identity) ?? cached;
     const saved = Math.max(0, updated.originalTokens - updated.tokens);
 
     logger.info(
@@ -260,10 +335,14 @@ export function storeInCache(
   filePath: string,
   content: string,
   originalTokens: number,
-  type: "file" | "image" = "file"
+  type: "file" | "image" = "file",
+  depth: CompressionDepth = "signature",
+  language = detectLanguage(filePath)
 ): void {
   try {
-    const absPath = fs.realpathSync(filePath);
+    const absPath = safeResolveExistingFile(filePath, {
+      caller: "gate_dedup_context:auto-store",
+    });
     const hash = computeFileHash(absPath);
     const tokens = countTextTokens(content);
 
@@ -274,6 +353,10 @@ export function storeInCache(
       tokens,
       originalTokens,
       type,
+      depth,
+      language,
+      compressorVersion: COMPRESSOR_CACHE_VERSION,
+      schemaVersion: CACHE_SCHEMA_VERSION,
     });
 
     logger.info(`Auto-cached: ${absPath} (${tokens} compressed tokens)`);

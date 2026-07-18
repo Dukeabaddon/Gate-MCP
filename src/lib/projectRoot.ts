@@ -1,9 +1,17 @@
 /**
- * Resolve project / graphify paths for gate_graph_query.
+ * Trusted project-root and Graphify report resolution.
  */
 
 import fs from "node:fs";
 import path from "node:path";
+import {
+  getAllowedProjectRoot,
+  isPathWithin,
+  resolveProjectRoot,
+  safeResolve,
+  safeResolveExistingDirectory,
+  safeResolveExistingFile,
+} from "./pathGuard.js";
 
 const MAX_WALK = 14;
 
@@ -14,38 +22,60 @@ const GRAPHIFY_CANDIDATES = [
 ];
 
 /**
- * Walk upward from startDir; return absolute path to GRAPH_REPORT.md if found.
+ * Walk upward from startDir without ever crossing the configured workspace.
+ * Symlinked reports are canonicalized and rejected when they escape that root.
  */
 export function findGraphifyReport(startDir: string): string | null {
-  const envPath = process.env.GATE_GRAPHIFY_REPORT?.trim();
-  if (envPath && fs.existsSync(envPath)) return path.resolve(envPath);
+  const allowedRoot = getAllowedProjectRoot();
+  const startRoot = resolveProjectRoot(startDir, {
+    caller: "findGraphifyReport",
+  });
 
-  let dir = path.resolve(startDir);
-  for (let i = 0; i < MAX_WALK; i++) {
+  const envPath = process.env.GATE_GRAPHIFY_REPORT?.trim();
+  if (envPath) {
+    const resolvedOverride = safeResolve(envPath, {
+      caller: "findGraphifyReport",
+    });
+    if (fs.existsSync(resolvedOverride)) {
+      return safeResolveExistingFile(resolvedOverride, {
+        caller: "findGraphifyReport",
+      });
+    }
+  }
+
+  let dir = startRoot;
+  for (let i = 0; i < MAX_WALK && isPathWithin(allowedRoot, dir); i++) {
     for (const rel of GRAPHIFY_CANDIDATES) {
       const candidate = path.join(dir, rel);
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs.existsSync(candidate)) {
+        return safeResolveExistingFile(candidate, {
+          caller: "findGraphifyReport",
+        });
+      }
     }
+
+    if (dir === allowedRoot) break;
     const parent = path.dirname(dir);
-    if (parent === dir) break;
+    if (parent === dir || !isPathWithin(allowedRoot, parent)) break;
     dir = parent;
   }
   return null;
 }
 
-/**
- * Directory containing graphify-out (parent of graphify-out folder).
- */
+/** Directory containing graphify-out (parent of graphify-out folder). */
 export function graphifyWorkspaceRoot(reportPath: string): string {
-  return path.dirname(path.dirname(reportPath));
+  const report = safeResolveExistingFile(reportPath, {
+    caller: "graphifyWorkspaceRoot",
+  });
+  return safeResolveExistingDirectory(path.dirname(path.dirname(report)), {
+    caller: "graphifyWorkspaceRoot",
+  });
 }
 
 /**
- * Resolve code index root: explicit arg > GATE_PROJECT_ROOT > cwd.
+ * Resolve a code index root. Explicit tool arguments may narrow the configured
+ * workspace root, but cannot widen it.
  */
 export function resolveCodeRoot(explicit?: string): string {
-  if (explicit?.trim()) return path.resolve(explicit.trim());
-  const env = process.env.GATE_PROJECT_ROOT?.trim();
-  if (env) return path.resolve(env);
-  return path.resolve(process.cwd());
+  return resolveProjectRoot(explicit, { caller: "resolveCodeRoot" });
 }

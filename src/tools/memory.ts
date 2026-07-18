@@ -17,6 +17,7 @@ import {
   memoryPut,
 } from "../lib/memoryDb.js";
 import logger from "../lib/logger.js";
+import { resolveCodeRoot } from "../lib/projectRoot.js";
 
 export type MemoryAction = "read" | "write" | "delete" | "list" | "clear";
 
@@ -46,7 +47,8 @@ function storageHint(projectRoot: string): string {
  * Handle a memory operation.
  */
 export async function handleMemory(args: MemoryInput): Promise<MemoryResult> {
-  const { action, key, value, projectRoot = process.cwd() } = args;
+  const { action, key, value } = args;
+  const projectRoot = resolveCodeRoot(args.projectRoot);
   const backend = memoryBackendLabel(projectRoot);
 
   switch (action) {

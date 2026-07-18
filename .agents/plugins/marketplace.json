@@ -1,0 +1,20 @@
+{
+  "name": "dukeabaddon-gate-mcp",
+  "interface": {
+    "displayName": "Gate MCP"
+  },
+  "plugins": [
+    {
+      "name": "gatemcp",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gatemcp"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

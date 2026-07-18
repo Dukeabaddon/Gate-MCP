@@ -26,7 +26,10 @@ import { handleGateInit } from "./tools/gateInit.js";
 import { GATEMCP_VERSION } from "./version.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb } from "./lib/cacheDb.js";
+import { closeAllMemoryDbs } from "./lib/memoryDb.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
+import { fileURLToPath } from "node:url";
+import { formatDoctorReport, runDoctor } from "./doctor.js";
 
 // ─── Server initialization ─────────────────────────────────────────────────
 
@@ -42,7 +45,7 @@ server.registerTool(
   {
     title: "Gate Optimize Image",
     description:
-      "Compress images via OCR text extraction or downscaling. 76-97% savings. See gate_help (recommended_stack).",
+      "Compress images via OCR text extraction or downscaling with measured results. See gate_help (recommended_stack).",
     inputSchema: z.object({
       imagePath: z
         .string()
@@ -281,7 +284,7 @@ server.registerTool(
   "gate_clean_response",
   {
     title: "Gate Clean Response",
-    description: "TOON JSON compressor. Arrays→pipe tables, 37-81% savings. Modes: toon/compact/whitelist. Use gate_help for full docs.",
+    description: "TOON JSON compressor with measured per-result savings. Modes: toon/compact/whitelist. Use gate_help for full docs.",
     inputSchema: z.object({
       data: z.string().describe("Raw JSON string to compress"),
       format: z
@@ -332,7 +335,7 @@ server.registerTool(
       "Compressed catalog of every tool from your downstream MCP servers " +
       "(GitHub, Postgres, etc.) configured in .gate-mcp/proxy-servers.json. " +
       "Modes: list (default), describe (full schema for one tool), status, refresh. " +
-      "Cuts the per-turn MCP schema overhead by 70-90%. Use gate_help for full docs.",
+      "Disabled until GATE_ENABLE_PROXY=1. Reports measured catalog savings. Use gate_help for full docs.",
     inputSchema: z.object({
       action: z
         .enum(["list", "describe", "status", "refresh"])
@@ -567,7 +570,7 @@ server.registerTool(
   {
     title: "Gate Session Stats",
     description:
-      "Cumulative token savings from dedup cache (hits, entries). See gate_help recommended_stack.",
+      "Measured file/byte/token work plus dedup cache activity. See gate_help gate_session_stats.",
     inputSchema: z.object({}),
   },
   async () => {
@@ -637,6 +640,11 @@ async function gracefulShutdown(signal: string): Promise<void> {
     logger.warn(`Cache DB cleanup failed during shutdown: ${err}`);
   }
   try {
+    closeAllMemoryDbs();
+  } catch (err) {
+    logger.warn(`Memory DB cleanup failed during shutdown: ${err}`);
+  }
+  try {
     await closeAllProxies();
   } catch (err) {
     logger.warn(`Proxy connection cleanup failed during shutdown: ${err}`);
@@ -644,13 +652,34 @@ async function gracefulShutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
-process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
-process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
-process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
-
 // ─── Start server ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  if (process.argv[2] === "doctor") {
+    const doctorArgs = process.argv.slice(3);
+    const json = doctorArgs.includes("--json");
+    const strict = doctorArgs.includes("--strict");
+    const projectRoot = doctorArgs.find((arg) => !arg.startsWith("--"));
+    const report = await runDoctor({
+      projectRoot,
+      serverEntrypoint: fileURLToPath(import.meta.url),
+      strict,
+    });
+    if (json) {
+      process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+    } else {
+      process.stderr.write(`${formatDoctorReport(report)}\n`);
+    }
+    closeCacheDb();
+    closeAllMemoryDbs();
+    process.exitCode = report.ok ? 0 : 1;
+    return;
+  }
+
+  process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
+  process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
+  process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
+
   logger.info(`Starting gatemcp server v${GATEMCP_VERSION}...`);
 
   const transport = new StdioServerTransport();

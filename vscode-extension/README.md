@@ -2,6 +2,9 @@
 
 Minimal helper (not an LSP): contributes JSON / JSONC snippets so you can paste an MCP config into `.vscode/mcp.json`, Cursor `.cursor/mcp.json`, or VS Code **Settings → MCP** JSON without hunting the readme.
 
+Install the Gate CLI first with the reviewed native-build allowlist in the
+repository's main README.
+
 ## Install (side-load)
 
 From the repo root:
@@ -30,7 +33,7 @@ Create `.vscode/tasks.json` in your project:
     {
       "label": "gatemcp: MCP server (stdio)",
       "type": "shell",
-      "command": "npx -y @gatemcp/cli",
+      "command": "gatemcp",
       "problemMatcher": [],
       "presentation": {
         "reveal": "always",
@@ -41,8 +44,9 @@ Create `.vscode/tasks.json` in your project:
 }
 ```
 
-Then **Tasks: Run Task → gatemcp: MCP server (stdio)**. Most MCP setups instead reference the same `npx` command in the IDE MCP settings file; this task is mainly for debugging.
+Then **Tasks: Run Task → gatemcp: MCP server (stdio)**. Most MCP setups instead reference the same `gatemcp` command in the IDE MCP settings file; this task is mainly for debugging.
 
 ## Published CLI
 
-Package: `@gatemcp/cli` — binary `gatemcp`. Snippets use `npx -y @gatemcp/cli` so no global install is required.
+Package: `@gatemcp/cli` — binary `gatemcp`. Snippets use the reviewed global
+installation so npm 12 does not silently skip required native builds.

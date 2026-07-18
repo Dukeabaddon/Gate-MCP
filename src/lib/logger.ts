@@ -6,19 +6,21 @@
  * Using console.log will crash the MCP transport (especially Antigravity).
  */
 
-const SUPPRESS_LOGS = process.env.DISABLE_CONSOLE_OUTPUT === "true";
+function suppressLogs(): boolean {
+  return process.env.DISABLE_CONSOLE_OUTPUT === "true";
+}
 
 function timestamp(): string {
   return new Date().toISOString();
 }
 
 export function info(message: string, ...args: unknown[]): void {
-  if (SUPPRESS_LOGS) return;
+  if (suppressLogs()) return;
   console.error(`[gate-mcp] [INFO]  ${timestamp()} ${message}`, ...args);
 }
 
 export function warn(message: string, ...args: unknown[]): void {
-  if (SUPPRESS_LOGS) return;
+  if (suppressLogs()) return;
   console.error(`[gate-mcp] [WARN]  ${timestamp()} ${message}`, ...args);
 }
 
@@ -29,7 +31,7 @@ export function error(message: string, ...args: unknown[]): void {
 }
 
 export function debug(message: string, ...args: unknown[]): void {
-  if (SUPPRESS_LOGS) return;
+  if (suppressLogs()) return;
   if (process.env.LOG_LEVEL === "debug") {
     console.error(`[gate-mcp] [DEBUG] ${timestamp()} ${message}`, ...args);
   }

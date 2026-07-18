@@ -74,6 +74,7 @@ export interface ProxyToolsResult {
   };
   status?: Array<{
     server: string;
+    projectRoot: string;
     connectedSecondsAgo: number;
     toolsCached: number;
   }>;
@@ -120,7 +121,9 @@ export async function handleProxyTools(
     // Drop any cached connections so the next listProxyTools call re-spawns
     // them with fresh tool catalogs. Useful when a downstream server has
     // hot-reloaded its tool registry.
-    await Promise.all(allServerNames.map((s) => closeProxyConnection(s)));
+    await Promise.all(
+      allServerNames.map((s) => closeProxyConnection(s, projectRoot))
+    );
     logger.info(`[proxy] refreshed ${allServerNames.length} server(s)`);
   }
 
@@ -243,6 +246,7 @@ function buildStatusResult(): ProxyToolsResult {
   const now = Date.now();
   const rows = status.map((s) => ({
     server: s.server,
+    projectRoot: s.projectRoot,
     connectedSecondsAgo: Math.round((now - s.connectedAt) / 1000),
     toolsCached: s.toolsCached,
   }));

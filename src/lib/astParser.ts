@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import logger from "./logger.js";
 import type { FileSignature, SupportedLanguage } from "../types.js";
+import { GATEMCP_VERSION } from "../version.js";
 
 const require = createRequire(import.meta.url);
 
@@ -249,6 +250,23 @@ export function extractSignatures(
   source: string,
   language: SupportedLanguage
 ): FileSignature {
+  // Valid JSON does not need a native grammar. Build a bounded schema outline
+  // directly so JSON compression remains useful when tree-sitter bindings are
+  // unavailable on the host.
+  if (language === "json") {
+    try {
+      return {
+        imports: [],
+        exports: [],
+        functions: [],
+        classes: buildJsonStructure(JSON.parse(source)),
+      };
+    } catch {
+      // JSONC and partially edited files continue through the native/fallback
+      // parser path below.
+    }
+  }
+
   // Route Flow-typed .js files through the TypeScript grammar (see
   // pickGrammarLanguage doc-comment). JS/TS share collector logic so the
   // downstream traverseNode call still receives "javascript".
@@ -639,9 +657,105 @@ function collectCssNode(node: any, type: string, result: FileSignature): void {
   }
 }
 
-function collectJsonNode(_node: any, _type: string, _result: FileSignature): void {
-  // JSON has no functions/classes/imports — leave empty. Just having the AST
-  // proves the file parsed cleanly. Top-level keys could be listed if needed.
+function collectJsonNode(node: any, type: string, result: FileSignature): void {
+  if (type !== "pair") return;
+
+  const keyNode = node.childForFieldName("key") ?? node.namedChild(0);
+  const valueNode = node.childForFieldName("value") ?? node.namedChild(1);
+  if (!keyNode || !valueNode) return;
+
+  let key = keyNode.text;
+  try {
+    key = JSON.parse(key);
+  } catch {
+    key = key.replace(/^['\"]|['\"]$/g, "");
+  }
+
+  let depth = 0;
+  let parent = node.parent;
+  while (parent) {
+    if (parent.type === "object" || parent.type === "array") depth += 1;
+    parent = parent.parent;
+  }
+  if (depth > JSON_MAX_DEPTH) return;
+
+  result.classes.push(
+    `${"  ".repeat(Math.max(0, depth - 1))}${key}: ${jsonAstType(valueNode.type)}`
+  );
+}
+
+const JSON_MAX_DEPTH = 8;
+const JSON_MAX_OBJECT_KEYS = 50;
+const JSON_MAX_ARRAY_TYPES = 20;
+
+function jsonValueType(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function jsonAstType(type: string): string {
+  switch (type) {
+    case "object":
+    case "array":
+    case "string":
+    case "number":
+    case "true":
+    case "false":
+    case "null":
+      return type === "true" || type === "false" ? "boolean" : type;
+    default:
+      return "unknown";
+  }
+}
+
+/** Build a deterministic, bounded JSON schema outline without retaining values. */
+function buildJsonStructure(value: unknown): string[] {
+  const lines: string[] = [];
+
+  const visit = (current: unknown, label: string, depth: number): void => {
+    const indent = "  ".repeat(depth);
+    const type = jsonValueType(current);
+
+    if (depth >= JSON_MAX_DEPTH) {
+      lines.push(`${indent}${label}: ${type} (depth limit)`);
+      return;
+    }
+
+    if (Array.isArray(current)) {
+      const sampled = current.slice(0, JSON_MAX_ARRAY_TYPES);
+      const types = [...new Set(sampled.map(jsonValueType))];
+      const union = types.length > 0 ? types.join(" | ") : "unknown";
+      lines.push(`${indent}${label}: array[${current.length}]<${union}>`);
+
+      const representative = sampled.find(
+        (item) => item !== null && typeof item === "object"
+      );
+      if (representative !== undefined) {
+        visit(representative, "[]", depth + 1);
+      }
+      return;
+    }
+
+    if (current !== null && typeof current === "object") {
+      const entries = Object.entries(current as Record<string, unknown>);
+      lines.push(`${indent}${label}: object{${entries.length}}`);
+      for (const [key, nested] of entries.slice(0, JSON_MAX_OBJECT_KEYS)) {
+        visit(nested, key, depth + 1);
+      }
+      if (entries.length > JSON_MAX_OBJECT_KEYS) {
+        lines.push(
+          `${"  ".repeat(depth + 1)}... ${entries.length - JSON_MAX_OBJECT_KEYS} more keys`
+        );
+      }
+      return;
+    }
+
+    lines.push(`${indent}${label}: ${type}`);
+  };
+
+  visit(value, "$", 0);
+  return lines;
 }
 
 function collectPhpNode(node: any, type: string, result: FileSignature): void {
@@ -880,7 +994,7 @@ function extractSignaturesRegex(
 export function formatSignature(sig: FileSignature, language: string): string {
   const sections: string[] = [];
   sections.push(`// Language: ${language}`);
-  sections.push(`// Extracted signature (gatemcp v0.3)`);
+  sections.push(`// Extracted structure (gatemcp v${GATEMCP_VERSION})`);
   sections.push("");
 
   if (sig.imports.length > 0) {

@@ -20,9 +20,18 @@ import { safeResolveExistingFile } from "../lib/pathGuard.js";
 import logger from "../lib/logger.js";
 import type { CompressionDepth, CompressFileResult } from "../types.js";
 import { checkCache, storeInCache } from "./dedupContext.js";
+import { recordCompressionMeasurement } from "../lib/sessionMetrics.js";
 
 /** Languages where AST signature/summary often inflates token count. */
 const STRUCTURE_ONLY_LANGS = new Set(["yaml", "markdown", "json", "unknown"]);
+const DEFAULT_MAX_FILE_BYTES = 32 * 1024 * 1024;
+
+function maxFileBytes(): number {
+  const configured = Number(process.env.GATE_MAX_FILE_BYTES);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.floor(configured)
+    : DEFAULT_MAX_FILE_BYTES;
+}
 
 function usesStructureOnly(language: string, depth: CompressionDepth): boolean {
   if (depth === "structure") return true;
@@ -31,8 +40,7 @@ function usesStructureOnly(language: string, depth: CompressionDepth): boolean {
 }
 
 function cacheHitResult(
-  cached: NonNullable<ReturnType<typeof checkCache>>,
-  depth: CompressionDepth
+  cached: NonNullable<ReturnType<typeof checkCache>>
 ): CompressFileResult {
   const metrics = calculateSavings(cached.originalTokens, cached.tokens);
   const savedThisHit = Math.max(0, cached.originalTokens - cached.tokens);
@@ -42,9 +50,9 @@ function cacheHitResult(
       : `Cache hit #${cached.hitCount}; saved ~${savedThisHit} tokens vs re-reading.`;
 
   return {
-    type: depth === "structure" ? "structure" : (depth as "signature" | "summary"),
+    type: cached.depth as "signature" | "summary" | "structure",
     content: cached.content,
-    language: "cached",
+    language: cached.language,
     originalTokens: cached.originalTokens,
     optimizedTokens: cached.tokens,
     savingsPercent: metrics.savingsPercent,
@@ -57,6 +65,7 @@ export async function handleCompressFile(args: {
   filePath: string;
   depth?: CompressionDepth;
 }): Promise<CompressFileResult> {
+  const startedAt = performance.now();
   const { depth = "signature" } = args;
 
   const filePath = safeResolveExistingFile(args.filePath, {
@@ -65,29 +74,61 @@ export async function handleCompressFile(args: {
 
   logger.info(`Compressing file: ${filePath} (depth=${depth})`);
 
+  const inputBytes = (await fs.promises.stat(filePath)).size;
+  const limit = maxFileBytes();
+  if (inputBytes > limit) {
+    throw new Error(
+      `File is ${inputBytes} bytes, above GATE_MAX_FILE_BYTES=${limit}. ` +
+        "Raise the explicit limit only for trusted large inputs."
+    );
+  }
+  const language = detectLanguage(filePath);
+  const effectiveDepth: CompressionDepth = usesStructureOnly(language, depth)
+    ? "structure"
+    : depth;
+  const finish = (
+    result: CompressFileResult,
+    cacheHit = false
+  ): CompressFileResult => {
+    // Match the exact text serialization returned by the MCP wrapper.
+    const serializedResult = JSON.stringify(result, null, 2);
+    recordCompressionMeasurement({
+      inputBytes,
+      outputBytes: Buffer.byteLength(serializedResult, "utf8"),
+      estimatedTokensBefore: result.originalTokens,
+      estimatedTokensAfter: countTextTokens(serializedResult),
+      elapsedMs: performance.now() - startedAt,
+      compressed: result.type !== "full" && !cacheHit,
+      cacheHit,
+    });
+    return result;
+  };
+
   if (depth === "signature" || depth === "summary" || depth === "structure") {
-    const cached = checkCache(filePath);
-    if (cached) return cacheHitResult(cached, depth);
+    const cached = checkCache(filePath, effectiveDepth, language);
+    if (cached) return finish(cacheHitResult(cached), true);
   }
 
-  const fullContent = fs.readFileSync(filePath, "utf-8");
+  const fullContent = await fs.promises.readFile(filePath, "utf-8");
   const originalTokens = countTextTokens(fullContent);
-  const language = detectLanguage(filePath);
-
   logger.debug(`Language: ${language}, original tokens: ${originalTokens}`);
 
   switch (depth) {
     case "structure": {
       const result = processStructure(fullContent, language, originalTokens);
-      storeInCache(filePath, result.content, originalTokens);
-      return result;
+      if (result.type !== "full") {
+        storeInCache(filePath, result.content, originalTokens, "file", "structure", language);
+      }
+      return finish(result);
     }
     case "signature": {
       const result = usesStructureOnly(language, depth)
         ? processStructure(fullContent, language, originalTokens)
         : processSignature(fullContent, language, originalTokens);
-      storeInCache(filePath, result.content, originalTokens);
-      return result;
+      if (result.type !== "full") {
+        storeInCache(filePath, result.content, originalTokens, "file", effectiveDepth, language);
+      }
+      return finish(result);
     }
     case "summary": {
       if (STRUCTURE_ONLY_LANGS.has(language)) {
@@ -97,19 +138,25 @@ export async function handleCompressFile(args: {
           originalTokens,
           "summary not ideal for this format; using structure (keys/headings only)."
         );
-        storeInCache(filePath, result.content, originalTokens);
-        return result;
+        if (result.type !== "full") {
+          storeInCache(filePath, result.content, originalTokens, "file", "structure", language);
+        }
+        return finish(result);
       }
       const result = processSummary(fullContent, language, originalTokens);
-      storeInCache(filePath, result.content, originalTokens);
-      return result;
+      if (result.type !== "full") {
+        storeInCache(filePath, result.content, originalTokens, "file", "summary", language);
+      }
+      return finish(result);
     }
     case "full":
-      return processFull(fullContent, language, originalTokens);
+      return finish(processFull(fullContent, language, originalTokens));
     default: {
       const result = processSignature(fullContent, language, originalTokens);
-      storeInCache(filePath, result.content, originalTokens);
-      return result;
+      if (result.type !== "full") {
+        storeInCache(filePath, result.content, originalTokens, "file", "signature", language);
+      }
+      return finish(result);
     }
   }
 }
@@ -121,6 +168,14 @@ function processStructure(
   extraNote?: string
 ): CompressFileResult {
   const sig = extractSignatures(source, language as Parameters<typeof extractSignatures>[1]);
+  if (!hasStructuralSignal(sig)) {
+    return uncompressedFallback(
+      source,
+      language,
+      originalTokens,
+      "No reliable structural outline was detected"
+    );
+  }
   let content = formatSignature(sig, language);
   let lines = content.split("\n");
   const maxLines = 120;
@@ -170,6 +225,14 @@ function processSignature(
   originalTokens: number
 ): CompressFileResult {
   const sig = extractSignatures(source, language as Parameters<typeof extractSignatures>[1]);
+  if (!hasStructuralSignal(sig)) {
+    return uncompressedFallback(
+      source,
+      language,
+      originalTokens,
+      "No reliable signatures were detected"
+    );
+  }
   const content = formatSignature(sig, language);
   const metrics = calculateSavings(originalTokens, countTextTokens(content));
 
@@ -192,6 +255,33 @@ function processSignature(
       metrics,
       `Extracted ${counts.join(", ") || "structural signatures"} from ${language} file.`
     ),
+  };
+}
+
+function hasStructuralSignal(sig: ReturnType<typeof extractSignatures>): boolean {
+  return (
+    sig.imports.length > 0 ||
+    sig.exports.length > 0 ||
+    sig.functions.length > 0 ||
+    sig.classes.length > 0
+  );
+}
+
+function uncompressedFallback(
+  source: string,
+  language: string,
+  originalTokens: number,
+  reason: string
+): CompressFileResult {
+  return {
+    type: "full",
+    content: source,
+    language,
+    originalTokens,
+    optimizedTokens: originalTokens,
+    savingsPercent: 0,
+    expanded: false,
+    note: `${reason}; full content returned without claiming savings.`,
   };
 }
 

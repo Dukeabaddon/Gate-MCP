@@ -1,11 +1,11 @@
 {
-  "gatemcp MCP server (stdio via npx)": {
+  "gatemcp MCP server (installed CLI)": {
     "prefix": "gatemcp-mcp",
     "description": "MCP server entry for @gatemcp/cli",
     "body": [
       "\"gatemcp\": {",
-      "  \"command\": \"npx\",",
-      "  \"args\": [\"-y\", \"@gatemcp/cli\"]",
+      "  \"command\": \"gatemcp\",",
+      "  \"args\": []",
       "}"
     ]
   },
@@ -16,8 +16,8 @@
       "{",
       "  \"mcpServers\": {",
       "    \"gatemcp\": {",
-      "      \"command\": \"npx\",",
-      "      \"args\": [\"-y\", \"@gatemcp/cli\"]",
+      "      \"command\": \"gatemcp\",",
+      "      \"args\": []",
       "    }",
       "  }",
       "}"

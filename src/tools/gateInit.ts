@@ -47,7 +47,7 @@ export async function handleGateInit(args: {
       ? graphifyStaleWarning(workspaceRoot, reportPath)
       : null;
 
-  const stats = getStats();
+  const stats = getStats(projectRoot);
   const graphifyCli = isGraphifyCliAvailable();
 
   const recommendedProjectRoots: string[] = [projectRoot];
@@ -86,8 +86,8 @@ export async function handleGateInit(args: {
       staleWarning,
     },
     cache: {
-      path: cacheDbPath(),
-      persistent: isPersistent(),
+      path: cacheDbPath(projectRoot),
+      persistent: isPersistent(projectRoot),
       totalEntries: stats.totalEntries,
       totalHits: stats.totalHits,
       totalTokensSaved: stats.totalTokensSaved,
