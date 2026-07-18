@@ -19,6 +19,10 @@ import {
   hasNativeTreeSitterGrammar,
 } from "./lib/astParser.js";
 
+// Keep the 10,000-operation cache phase readable. Test assertions still print,
+// and logger.error remains visible.
+process.env.DISABLE_CONSOLE_OUTPUT = "true";
+
 const DIVIDER = "═".repeat(60);
 const PASS = "✅";
 const FAIL = "❌";
@@ -284,11 +288,15 @@ if __name__ == "__main__":
       const wantHit = Math.random() < HIT_RATIO;
       if (wantHit) {
         const f = files[Math.floor(Math.random() * files.length)];
-        const got = checkCache(f);
+        const got = checkCache(f, "signature", "unknown");
         if (got) hits++;
         else misses++;
       } else {
-        const got = checkCache(path.join(tmpCacheDir, `nonexistent-${i}.txt`));
+        const got = checkCache(
+          path.join(tmpCacheDir, `nonexistent-${i}.txt`),
+          "signature",
+          "unknown"
+        );
         if (got) hits++;
         else misses++;
       }

@@ -1,17 +1,13 @@
 /**
- * Path guard utilities.
+ * Canonical path-boundary utilities.
  *
- * Prevents path-traversal and limits file access to a configurable
- * project-root boundary. Local MCP servers run with the user's full
- * permissions — without a boundary, a malicious or hallucinating LLM
- * caller could request `/etc/passwd` or `~/.ssh/id_rsa`.
+ * Local MCP servers inherit the user's filesystem permissions. Every path
+ * accepted from a tool call must therefore remain under one trusted root:
+ * GATE_PROJECT_ROOT when configured, otherwise the server's startup cwd.
+ * Caller-supplied projectRoot values may narrow that boundary, never widen it.
  *
- * Boundary precedence (highest to lowest):
- *   1. Explicit `projectRoot` argument
- *   2. GATE_PROJECT_ROOT env var
- *   3. process.cwd() (default)
- *
- * Disable boundary entirely: set GATE_ALLOW_ANY_PATH=1 (not recommended).
+ * Set GATE_ALLOW_ANY_PATH=1 only for an explicitly trusted environment. Known
+ * credential paths remain denied even when boundary enforcement is disabled.
  */
 
 import fs from "node:fs";
@@ -19,86 +15,187 @@ import path from "node:path";
 import os from "node:os";
 import logger from "./logger.js";
 
-/** Files outside the boundary will throw unless this is true. */
-const BOUNDARY_DISABLED = process.env.GATE_ALLOW_ANY_PATH === "1";
-
-/** Paths explicitly denied even when they fall inside the boundary. */
 const SENSITIVE_PATTERNS = [
-  /\/\.ssh\//,
-  /\/\.gnupg\//,
-  /\/\.aws\/credentials/,
-  /\/\.netrc$/,
-  /\/etc\/passwd$/,
-  /\/etc\/shadow$/,
+  /(^|\/)\.ssh(\/|$)/,
+  /(^|\/)\.gnupg(\/|$)/,
+  /(^|\/)\.aws\/credentials$/,
+  /(^|\/)\.netrc$/,
+  /(^|\/)etc\/passwd$/,
+  /(^|\/)etc\/shadow$/,
 ];
 
 export interface SafePathOptions {
-  /** Override the project-root boundary explicitly. */
+  /** A caller-supplied root that may narrow, but never widen, the boundary. */
   projectRoot?: string;
-  /** Caller name for log messages. */
+  /** Caller name for diagnostics. */
   caller?: string;
 }
 
+export interface ResolveProjectRootOptions {
+  /** Caller name for diagnostics. */
+  caller?: string;
+}
+
+function boundaryDisabled(): boolean {
+  return process.env.GATE_ALLOW_ANY_PATH === "1";
+}
+
+function expandHome(input: string): string {
+  if (input === "~") return os.homedir();
+  if (input.startsWith(`~${path.sep}`) || input.startsWith("~/")) {
+    return path.join(os.homedir(), input.slice(2));
+  }
+  return input;
+}
+
+function requirePath(input: string, label = "Path"): string {
+  if (!input || typeof input !== "string" || input.trim().length === 0) {
+    throw new Error(`${label} argument must be a non-empty string`);
+  }
+  return input;
+}
+
 /**
- * Resolve a user-supplied path to an absolute path and verify it falls
- * within the configured project-root boundary. Throws on violation.
+ * Resolve symlinks for an existing path. For a not-yet-created output path,
+ * resolve the nearest existing ancestor and append the missing components.
+ * This prevents a symlinked parent directory from escaping the boundary.
+ */
+export function canonicalizePath(input: string): string {
+  const absolute = path.resolve(expandHome(requirePath(input)));
+  let existing = absolute;
+  const missing: string[] = [];
+
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) {
+      throw new Error(`Unable to resolve an existing parent for: ${absolute}`);
+    }
+    missing.unshift(path.basename(existing));
+    existing = parent;
+  }
+
+  const canonicalParent = fs.realpathSync.native(existing);
+  return path.resolve(canonicalParent, ...missing);
+}
+
+function canonicalExistingDirectory(input: string, label: string): string {
+  const canonical = canonicalizePath(input);
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(canonical);
+  } catch {
+    throw new Error(`${label} does not exist: ${canonical}`);
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(`${label} is not a directory: ${canonical}`);
+  }
+  return canonical;
+}
+
+/** Cross-platform, component-aware containment. */
+export function isPathWithin(boundary: string, candidate: string): boolean {
+  const relative = path.relative(boundary, candidate);
+  return (
+    relative === "" ||
+    (!path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`))
+  );
+}
+
+function normalizedForSensitiveCheck(candidate: string): string {
+  return candidate.replaceAll("\\", "/").toLocaleLowerCase("en-US");
+}
+
+function assertNotSensitive(candidate: string): void {
+  const normalized = normalizedForSensitiveCheck(candidate);
+  for (const pattern of SENSITIVE_PATTERNS) {
+    if (pattern.test(normalized)) {
+      throw new Error(
+        `Refused to access sensitive path: ${candidate}. ` +
+          "Sensitive credential and system-account paths are always denied."
+      );
+    }
+  }
+}
+
+function assertContained(candidate: string, boundary: string): void {
+  if (!isPathWithin(boundary, candidate)) {
+    throw new Error(
+      `Path ${candidate} is outside project boundary ${boundary}. ` +
+        "Set GATE_PROJECT_ROOT to the trusted workspace before server startup."
+    );
+  }
+}
+
+/**
+ * Return the trusted workspace boundary. This value comes only from server
+ * configuration, never a tool argument.
+ */
+export function getAllowedProjectRoot(): string {
+  const configured = process.env.GATE_PROJECT_ROOT?.trim() || process.cwd();
+  return canonicalExistingDirectory(configured, "Configured project root");
+}
+
+/**
+ * Validate a caller-supplied projectRoot. Tool arguments may select the
+ * configured root or a nested directory, but cannot select a sibling/parent.
+ */
+export function resolveProjectRoot(
+  requested?: string,
+  options: ResolveProjectRootOptions = {}
+): string {
+  const allowedRoot = getAllowedProjectRoot();
+  const candidate = requested?.trim()
+    ? canonicalExistingDirectory(
+        path.isAbsolute(expandHome(requested.trim()))
+          ? expandHome(requested.trim())
+          : path.resolve(allowedRoot, expandHome(requested.trim())),
+        "Project root"
+      )
+    : allowedRoot;
+
+  assertNotSensitive(candidate);
+  if (!boundaryDisabled()) {
+    assertContained(candidate, allowedRoot);
+  } else if (options.caller) {
+    logger.warn(
+      `[${options.caller}] boundary disabled (GATE_ALLOW_ANY_PATH=1): ${candidate}`
+    );
+  }
+  return candidate;
+}
+
+/**
+ * Resolve a path and verify its canonical target remains within the effective
+ * project root. Non-existent outputs are checked through their nearest
+ * existing canonical parent.
  */
 export function safeResolve(
   userPath: string,
   opts: SafePathOptions = {}
 ): string {
-  if (!userPath || typeof userPath !== "string") {
-    throw new Error("Path argument must be a non-empty string");
-  }
-
-  // Expand ~ to home directory
-  let expanded = userPath;
-  if (expanded.startsWith("~")) {
-    expanded = path.join(os.homedir(), expanded.slice(1));
-  }
-
-  const boundary = path.resolve(
-    opts.projectRoot ?? process.env.GATE_PROJECT_ROOT ?? process.cwd()
-  );
-
-  const resolved = path.isAbsolute(expanded)
+  const effectiveRoot = resolveProjectRoot(opts.projectRoot, {
+    caller: opts.caller,
+  });
+  const expanded = expandHome(requirePath(userPath));
+  const unresolved = path.isAbsolute(expanded)
     ? path.resolve(expanded)
-    : path.resolve(boundary, expanded);
+    : path.resolve(effectiveRoot, expanded);
+  const canonical = canonicalizePath(unresolved);
 
-  // Block known-sensitive locations regardless of boundary
-  for (const pattern of SENSITIVE_PATTERNS) {
-    if (pattern.test(resolved)) {
-      throw new Error(
-        `Refused to access sensitive path: ${resolved}. ` +
-          `Set GATE_ALLOW_ANY_PATH=1 only if you understand the risk.`
-      );
-    }
-  }
-
-  // Boundary check
-  if (!BOUNDARY_DISABLED) {
-    const withinBoundary =
-      resolved === boundary || resolved.startsWith(boundary + path.sep);
-    if (!withinBoundary) {
-      throw new Error(
-        `Path ${resolved} is outside project boundary ${boundary}. ` +
-          `Set GATE_PROJECT_ROOT or pass projectRoot to widen scope, ` +
-          `or set GATE_ALLOW_ANY_PATH=1 to disable.`
-      );
-    }
+  assertNotSensitive(canonical);
+  if (!boundaryDisabled()) {
+    assertContained(canonical, effectiveRoot);
   } else if (opts.caller) {
     logger.warn(
-      `[${opts.caller}] boundary disabled (GATE_ALLOW_ANY_PATH=1): ${resolved}`
+      `[${opts.caller}] boundary disabled (GATE_ALLOW_ANY_PATH=1): ${canonical}`
     );
   }
-
-  return resolved;
+  return canonical;
 }
 
-/**
- * Resolve and verify a path AND verify the file exists.
- * Useful for tool handlers that need to read files.
- */
+/** Resolve a guarded path and require an existing regular file. */
 export function safeResolveExistingFile(
   userPath: string,
   opts: SafePathOptions = {}
@@ -110,6 +207,25 @@ export function safeResolveExistingFile(
   const stat = fs.statSync(resolved);
   if (stat.isDirectory()) {
     throw new Error(`Path is a directory, not a file: ${resolved}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`Path is not a regular file: ${resolved}`);
+  }
+  return resolved;
+}
+
+/** Resolve a guarded path and require an existing directory. */
+export function safeResolveExistingDirectory(
+  userPath: string,
+  opts: SafePathOptions = {}
+): string {
+  const resolved = safeResolve(userPath, opts);
+  if (!fs.existsSync(resolved)) {
+    throw new Error(`Directory not found: ${resolved}`);
+  }
+  const stat = fs.statSync(resolved);
+  if (!stat.isDirectory()) {
+    throw new Error(`Path is not a directory: ${resolved}`);
   }
   return resolved;
 }

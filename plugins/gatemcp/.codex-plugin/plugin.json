@@ -1,0 +1,40 @@
+{
+  "name": "gatemcp",
+  "version": "0.5.5+codex.20260718070120",
+  "description": "Local MCP context compression, repository graph navigation, and measurable token savings for Codex.",
+  "author": {
+    "name": "Gate MCP contributors",
+    "url": "https://github.com/Dukeabaddon"
+  },
+  "homepage": "https://gate-mcp-site.vercel.app/",
+  "repository": "https://github.com/Dukeabaddon/Gate-MCP",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "mcp",
+    "context-compression",
+    "repository-graph",
+    "token-savings"
+  ],
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Gate MCP",
+    "shortDescription": "Compress context and navigate repository graphs",
+    "longDescription": "Expose Gate MCP tools in Codex for file compression, graph navigation, deduplication, health checks, and independently measurable session savings.",
+    "developerName": "Gate MCP contributors",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Local MCP",
+      "Context Compression",
+      "Repository Navigation"
+    ],
+    "websiteURL": "https://gate-mcp-site.vercel.app/",
+    "brandColor": "#2563EB",
+    "defaultPrompt": [
+      "Initialize Gate for this repository.",
+      "Map this repository before reading files.",
+      "Report measured Gate session savings."
+    ]
+  }
+}

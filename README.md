@@ -2,7 +2,7 @@
   <h1 align="center">🚪 gatemcp</h1>
   <p align="center">
     <strong>Context compression gateway for AI coding assistants</strong><br/>
-    Save 37–99% of input tokens before they hit the API
+    Measure and reduce context without hiding fidelity failures
   </p>
   <p align="center">
     <a href="https://gate-mcp-site.vercel.app/"><strong>Website</strong></a> •
@@ -19,31 +19,40 @@
 
 ## The Problem
 
-As of 2026, AI coding assistants waste **80–90% of context window** on:
+Gate targets four common sources of avoidable context. Results depend on the
+repository, selected tool, and payload shape:
 
-| Waste Source | Tokens Burned | gatemcp Savings |
-|---|---|---|
-| MCP tool definitions (10 servers) | ~30,000 per turn | **90%** (terse schemas + lazy docs) |
-| Reading source files | ~2,000 per file | **46–94%** (AST signatures only) |
-| Re-reading unchanged files | Full cost again | **~93%** (SHA-256 dedup cache) |
-| JSON API responses | ~5,000 per response | **37–81%** (TOON tabular notation) |
-| Screenshots / images | ~1,500–3,000 each | **76–97%** (OCR text extraction) |
+| Context source | Gate behavior |
+|---|---|
+| MCP tool definitions | Lazy descriptions and opt-in proxy catalogs |
+| Reading source files | AST signatures or bounded structural outlines |
+| Re-reading unchanged files | Cached computation plus explicit reference-only checks |
+| JSON API responses | TOON tables when the response shape is suitable |
+| Screenshots / images | OCR extraction or downscaling |
 
-gatemcp is a single local MCP server that compresses at **5 layers simultaneously** — something no other tool does.
+Gate is an **opt-in local MCP server**. The agent must call Gate tools; Gate does
+not intercept ordinary filesystem reads automatically.
 
 ## Installation
 
 ```bash
-npm install -g @gatemcp/cli
+npm install -g --strict-allow-scripts \
+  --allow-scripts=better-sqlite3,sharp,tesseract.js,tree-sitter,tree-sitter-bash,tree-sitter-c,tree-sitter-c-sharp,tree-sitter-cli,tree-sitter-cpp,tree-sitter-css,tree-sitter-go,tree-sitter-html,tree-sitter-java,tree-sitter-javascript,tree-sitter-json,tree-sitter-kotlin,tree-sitter-php,tree-sitter-python,tree-sitter-ruby,tree-sitter-rust,tree-sitter-svelte,tree-sitter-swift,tree-sitter-typescript,tree-sitter-vue,tree-sitter-yaml \
+  @gatemcp/cli
 ```
 
-Or use directly via npx (no install needed):
+Or use the same reviewed build approvals without a global install:
 
 ```bash
-npx -y @gatemcp/cli
+npm exec --yes --strict-allow-scripts \
+  --allow-scripts=better-sqlite3,sharp,tesseract.js,tree-sitter,tree-sitter-bash,tree-sitter-c,tree-sitter-c-sharp,tree-sitter-cli,tree-sitter-cpp,tree-sitter-css,tree-sitter-go,tree-sitter-html,tree-sitter-java,tree-sitter-javascript,tree-sitter-json,tree-sitter-kotlin,tree-sitter-php,tree-sitter-python,tree-sitter-ruby,tree-sitter-rust,tree-sitter-svelte,tree-sitter-swift,tree-sitter-typescript,tree-sitter-vue,tree-sitter-yaml \
+  --package=@gatemcp/cli -- gatemcp
 ```
 
-The npm package is `@gatemcp/cli` (scoped under the [@gatemcp](https://www.npmjs.com/org/gatemcp) org) but the installed CLI binary is just `gatemcp`. All IDE configs below use `npx -y @gatemcp/cli` so there's nothing to install globally if you don't want to.
+The npm package is `@gatemcp/cli` but the installed binary is `gatemcp`.
+The explicit allowlist is required by npm 12 for reviewed native dependency
+builds. Without it, Gate starts with safe fallbacks and strict doctor reports
+that SQLite is unavailable. A first native install can take up to one minute.
 
 <details>
 <summary><strong>Install from source (if you prefer)</strong></summary>
@@ -51,7 +60,7 @@ The npm package is `@gatemcp/cli` (scoped under the [@gatemcp](https://www.npmjs
 ```bash
 git clone https://github.com/Dukeabaddon/Gate-MCP.git
 cd Gate-MCP
-npm install --legacy-peer-deps
+npm install
 npm run build
 npm link   # makes "gatemcp" available system-wide
 ```
@@ -60,7 +69,8 @@ npm link   # makes "gatemcp" available system-wide
 
 ## How It Works
 
-gatemcp compresses at 5 layers of the MCP pipeline:
+Gate provides four input-side functions. A fifth output-side layer is an
+optional external integration:
 
 ```
                         ┌──────────────────────────┐
@@ -72,11 +82,11 @@ gatemcp compresses at 5 layers of the MCP pipeline:
                      ┌────────────▼────────────────┐
                      │      🚪 gatemcp              │
                      │                              │
-                     │  L0  Schema    → 46% saved   │
-                     │  L1  Navigate  → 93-99%      │
-                     │  L2  Input     → 46-94%      │
-                     │  L3  Response  → 37-81%      │
-                     │  L4  Output    → 60-75%*     │
+                     │  L0  Lazy schemas            │
+                     │  L1  Graph navigation        │
+                     │  L2  File compression        │
+                     │  L3  Response cleaning       │
+                     │  L4  External output layer*  │
                      │                              │
                      │  * L4 via Caveman (external) │
                      └────────────────────────────────┘
@@ -86,9 +96,13 @@ gatemcp compresses at 5 layers of the MCP pipeline:
 
 **Layer 1 — Code Navigation:** Symbol dependency graph (tree-sitter) plus optional **graphify-out** repo map (`graphify_hubs`, `graphify_search`, `graphify_map`). Symbol `search` auto-falls back to `GRAPH_REPORT.md` when there are zero symbol hits.
 
-**Layer 2 — Input Compression:** Files compressed to function signatures, imports, and class definitions across **23 languages** (see Language Support below). SHA-256 dedup prevents repeated reads — backed by a **persistent SQLite cache** (v0.4.0) at `.gate-mcp/cache.db` so hits survive across IDE restarts and concurrent IDEs.
+**Layer 2 — Input Compression:** Files become signatures or structural outlines
+across the language surfaces below. Cache identity includes the canonical path,
+content hash, requested depth, language, compressor version, and schema version.
+SQLite/WAL persistence is used when its native binding opens successfully.
 
-**Layer 3 — Response Cleaning:** JSON responses converted to TOON (Token-Optimized Object Notation) — pipe-delimited tables that LLMs parse perfectly.
+**Layer 3 — Response Cleaning:** Suitable JSON responses are converted to TOON
+(Token-Optimized Object Notation). Use validation for fidelity-sensitive data.
 
 **Layer 4 — Output Compression:** Recommended integration with [Caveman](https://github.com/juliusbrussee/caveman) for AI response compression.
 
@@ -97,14 +111,14 @@ gatemcp compresses at 5 layers of the MCP pipeline:
 | # | Tool | What It Does | Savings |
 |---|---|---|---|
 | 1 | `gate_init` | Project health: graphify map path, dedup DB, MCP slug hint | — |
-| 2 | `gate_optimize_image` | OCR text extraction or downscaling | 76–97% |
-| 3 | `gate_compress_file` | AST signatures (code) or **structure** (YAML/MD/config) | 46–94% |
-| 4 | `gate_graph_query` | Symbol graph + **graphify** map (`graphify_map` / `graphify_search`) | 93–99% |
+| 2 | `gate_optimize_image` | OCR text extraction or downscaling | Measured per result |
+| 3 | `gate_compress_file` | AST signatures or bounded structure; full fallback when no signal exists | Measured per result |
+| 4 | `gate_graph_query` | Symbol graph + **graphify** map (`graphify_map` / `graphify_search`) | Measured or modeled; see limitations |
 | 5 | `gate_memory` | Cross-session KV — **SQLite** in `.gate-mcp/cache.db` (JSON fallback) | — |
-| 6 | `gate_dedup_context` | SHA-256 content cache — **persistent** (SQLite/WAL) | ~93% on rereads |
-| 7 | `gate_session_stats` | Cumulative dedup hits and tokens saved | — |
-| 8 | `gate_clean_response` | TOON JSON → pipe-delimited tables | 37–81% |
-| 9 | `gate_proxy_tools` / `gate_proxy_call` | Compress other MCP servers' schemas + responses | 70–90% |
+| 6 | `gate_dedup_context` | Reference-only unchanged check; cached computation for file compression | Measured response |
+| 7 | `gate_session_stats` | Serialized-result byte/token accounting plus cache activity | — |
+| 8 | `gate_clean_response` | TOON JSON → pipe-delimited tables | Measured per result |
+| 9 | `gate_proxy_tools` / `gate_proxy_call` | Opt-in downstream MCP schemas and responses | Measured per result |
 | 10 | `gate_validate_compression` | LLM-in-the-loop quality score (mock provider for CI) | — |
 | 11 | `gate_help` | Full docs on demand; `tool=recommended_stack` for workflow | 46% schema overhead |
 
@@ -115,7 +129,7 @@ Every tool response includes `originalTokens`, `optimizedTokens`, and `savingsPe
 1. `gate_init` — confirm graphify path and set `GATE_PROJECT_ROOT` if needed  
 2. `gate_graph_query` with `queryType: graphify_map` (map before full `Read`)  
 3. `gate_compress_file` with `depth: signature` (Python/TS) or `structure` (YAML/MD)  
-4. `gate_session_stats` — cumulative cache savings  
+4. `gate_session_stats` — measured session work plus cache activity
 
 Call `gate_help` with `tool: "recommended_stack"` for the full playbook.
 
@@ -153,14 +167,20 @@ Path-traversal protection: by default, tool calls are restricted to the current 
 | `GATE_PROJECT_ROOT` | `process.cwd()` | Boundary for path arguments |
 | `GATE_ALLOW_ANY_PATH` | `0` | Set to `1` to disable boundary (NOT recommended) |
 | `GATE_MAX_FILES` | `5000` | Max files indexed by symbol graph (hard cap 50000) |
+| `GATE_MAX_FILE_BYTES` | `33554432` | Maximum file size accepted by `gate_compress_file` |
 | `GATE_CACHE_DB` | `<projectRoot>/.gate-mcp/cache.db` | Path to persistent dedup cache DB |
 | `GATE_GRAPHIFY_REPORT` | _(auto-discover)_ | Absolute path to `GRAPH_REPORT.md` if not under cwd |
+| `GATE_ENABLE_PROXY` | `0` | Set to `1` only after reviewing proxy commands |
 
 Sensitive paths (`~/.ssh`, `~/.aws/credentials`, `/etc/passwd`, etc) are blocked regardless of boundary.
 
 ## Benchmarks
 
-### Validated on Real Codebases
+### Historical real-codebase results
+
+The React figures below were produced by the v0.3.2 benchmark and are not a
+universal or current-session guarantee. Release gates use deterministic QA;
+rerun the benchmark before publishing new marketing claims.
 
 | Test | Target | Result |
 |---|---|---|
@@ -184,7 +204,7 @@ node dist/scripts/fidelity-test.js ~/demo/react/packages
 ```
 
 <details>
-<summary><strong>Per-Turn Token Savings (worked example)</strong></summary>
+<summary><strong>Modeled per-turn example (not a measurement)</strong></summary>
 
 ```
 Typical AI coding session (before):
@@ -208,9 +228,67 @@ With gatemcp:
 
 ## Usage
 
+### Codex plugin
+
+Install the repository marketplace and plugin with one command:
+
+```bash
+codex plugin marketplace add Dukeabaddon/Gate-MCP && codex plugin add gatemcp@dukeabaddon-gate-mcp
+```
+
+Restart Codex and open a new thread. Plugin MCP tools are loaded when a session
+starts, so the current thread will not gain `gate_init` after installation.
+Verify the installation by asking Codex to call `gate_init`, then confirm
+`gate_graph_query`, `gate_compress_file`, `gate_session_stats`, and `gate_help`
+are visible.
+
+The checked-in plugin pins the currently published npm server,
+`@gatemcp/cli@0.5.5`. Source-only changes in this repository become available
+through the marketplace after that package pin is updated to a published
+release. Until then, test the source build with `node dist/main.js doctor`.
+The plugin uses explicit `npm exec --package` resolution and a strict native
+build allowlist. This keeps SQLite available on a fresh npm 12 install without
+allowing unrelated dependency scripts.
+
+### Installation diagnostics
+
+After building this source checkout, run the end-to-end doctor:
+
+```bash
+npm run build
+node dist/main.js doctor /absolute/path/to/your/repo --strict
+```
+
+The published `@gatemcp/cli@0.5.5` does not contain doctor yet. Do not use its
+`npx` command for this check. Doctor checks the executable, Node dependencies,
+repository permissions, a SQLite write/reopen probe, the MCP initialize handshake, and
+`tools/list`. Diagnostics use `stderr`; `--json` writes a machine-readable
+report to `stdout` because doctor mode is not an MCP transport.
+
+Maintainers can run `npm run test:mcp` after `npm run build` for the Codex/MCP
+acceptance smoke. It verifies initialization, tool discovery, large-file
+compression, exact session metrics, clean JSON-RPC framing, and shutdown. The
+same smoke runs automatically before npm publication.
+
+`npm run test:plugin` separately tests the exact network-backed command pinned
+in `.mcp.json`. It is intentionally outside `prepublishOnly` because it tests
+the already-published package rather than the source being released.
+
+### Measured session statistics
+
+`gate_session_stats` keeps the existing persistent cache totals and adds
+process-local measurements. `files_considered` counts every successful,
+schema-valid `gate_compress_file` result. `files_compressed` counts successful
+non-`full`, non-cache-hit work. `cache_hits` counts successful deduplicated
+results. `input_bytes` counts every file considered, including cache hits.
+`output_bytes` and `estimated_tokens_after` cover the complete serialized Gate
+result, excluding the MCP/JSON-RPC envelope. `measurement_scope` records that
+boundary explicitly. `session_elapsed_ms` is wall-clock time since startup.
+
 ### Configure your IDE
 
-After `npm install -g gatemcp`, add gatemcp to your IDE's MCP config. Click your IDE below for the exact snippet.
+After the reviewed global installation command above, add `gatemcp` to your
+IDE's MCP config. Click your IDE below for the exact snippet.
 
 <details>
 <summary><strong>Cursor</strong> — <code>.cursor/mcp.json</code> in your workspace</summary>
@@ -219,8 +297,8 @@ After `npm install -g gatemcp`, add gatemcp to your IDE's MCP config. Click your
 {
   "mcpServers": {
     "gatemcp": {
-      "command": "npx",
-      "args": ["-y", "@gatemcp/cli@0.5.5"],
+      "command": "gatemcp",
+      "args": [],
       "env": {
         "GATE_PROJECT_ROOT": "/absolute/path/to/your/repo"
       }
@@ -241,8 +319,8 @@ Restart Cursor. Open the MCP panel (Settings → Features → MCP Servers) to ve
 {
   "mcpServers": {
     "gatemcp": {
-      "command": "npx",
-      "args": ["-y", "@gatemcp/cli"]
+      "command": "gatemcp",
+      "args": []
     }
   }
 }
@@ -258,8 +336,8 @@ Restart Claude Code. Run `/mcp` inside the CLI to confirm the server is listed.
 {
   "mcpServers": {
     "gatemcp": {
-      "command": "npx",
-      "args": ["-y", "@gatemcp/cli"]
+      "command": "gatemcp",
+      "args": []
     }
   }
 }
@@ -275,8 +353,8 @@ Restart Windsurf. Open the MCP panel from the Cascade settings to verify.
 {
   "mcpServers": {
     "gatemcp": {
-      "command": "npx",
-      "args": ["-y", "@gatemcp/cli"],
+      "command": "gatemcp",
+      "args": [],
       "env": {
         "MCP_MODE": "stdio",
         "DISABLE_CONSOLE_OUTPUT": "true"
@@ -296,8 +374,8 @@ Antigravity requires `MCP_MODE=stdio` and `DISABLE_CONSOLE_OUTPUT=true` for clea
 {
   "servers": {
     "gatemcp": {
-      "command": "npx",
-      "args": ["-y", "@gatemcp/cli"]
+      "command": "gatemcp",
+      "args": []
     }
   }
 }
@@ -309,16 +387,22 @@ Antigravity requires `MCP_MODE=stdio` and `DISABLE_CONSOLE_OUTPUT=true` for clea
 <details>
 <summary><strong>Other MCP-aware tools</strong> (Cline, Zed, Continue.dev, custom)</summary>
 
-Any client that supports MCP over stdio works. The generic invocation is:
+Any client that supports MCP over stdio works. After global installation, the
+generic invocation is:
 
 ```bash
-npx -y gatemcp
+gatemcp
 ```
 
-Pass it via your client's MCP config — the command is `npx`, the args are `["-y", "@gatemcp/cli"]`, and gatemcp speaks vanilla stdio MCP. If your client uses a different config key (e.g. `tools.mcpServers`), adapt the wrapping object but keep the inner shape.
+Pass it via your client's MCP config with command `gatemcp` and no arguments.
+If your client uses a different config key such as `tools.mcpServers`, adapt
+the wrapping object. Gate speaks MCP over stdio.
 </details>
 
 ### Example: Compress a File
+
+These outputs are illustrative. Actual values are calculated from each serialized
+tool result and can be lower, zero, or negative.
 
 ```
 User: Read src/main.ts
@@ -340,7 +424,7 @@ AI uses: gate_graph_query({ query: "handleCompressFile", queryType: "dependents"
 Result:
   traversed: 108 nodes
   responseTokens: 762
-  rawReadTokens: 15,200 (if files were read directly)
+  rawReadTokens: 15,200 (modeled baseline, not observed host traffic)
   savingsPercent: 95%
 ```
 
@@ -386,18 +470,18 @@ gate-mcp/
 └── tsconfig.json
 ```
 
-**Total: ~5,500 LOC · 17 unit + 63 stress tests · 0 failures**
+Exact test counts are printed by `npm run qa`.
 
 ## Tech Stack
 
-- **Runtime:** Node.js ≥20 + TypeScript ESM
+- **Runtime:** Node.js 20–26 + TypeScript ESM
 - **MCP SDK:** `@modelcontextprotocol/sdk` ^1.12.1
-- **AST:** tree-sitter — 12 native parsers (JS, TS, TSX, Python, Java, C#, C++, Go, Rust, HTML, CSS, JSON) + regex fallback for 11 more
+- **AST:** tree-sitter where the host ABI loads; deterministic regex/direct-JSON fallback otherwise
 - **Image:** sharp ^0.33 (primary) + jimp 1.6 (fallback) + tesseract.js 5.1
 - **Tokens:** gpt-tokenizer ^2.8.1 (real BPE counts, not estimates)
 - **Cache:** better-sqlite3 ^12 (optional, WAL mode) with in-memory Map fallback
 - **Validation:** Zod
-- **Dependencies:** 10 core + 9 optional native parsers — zero cloud, zero ML models
+- **Dependencies:** See `package.json` for the maintained runtime and optional parser set. No cloud service or hosted model is required.
 
 ## Comparison
 
@@ -407,28 +491,31 @@ gate-mcp/
 | Installation | `npm i -g` | `pip install` | System prompt | npm |
 | Cloud required | No | No | No | No |
 | ML models needed | No | No | No | No |
-| Languages | **12 native + 11 regex** | 25+ | Any | Any |
+| Languages | Native plus fallback tiers listed above | 25+ | Any | Any |
 | Codebase size | ~5.5K LOC | 252K LOC | ~100 lines | ~500 LOC |
 
-gatemcp is the only tool that compresses at **all input-side layers** in a single binary.
+Gate combines these opt-in input-side functions in one MCP server.
 
 ## Development
 
 ```bash
 # Install (with optional parsers)
-npm install --legacy-peer-deps
+npm install
 
 # Build
 npm run build
 
-# Test (40 unit tests)
+# Run the unit suite
 npm test
 
 # AlgoTrading / nested-graphify regression (optional)
 npm run validate:algo
 
-# Stress test (85 tests)
+# Run the stress suite
 npm run stress
+
+# Complete production gate
+npm run qa
 
 # LLM-in-the-loop validation CLI (mock provider, no API key)
 node dist/scripts/validate-llm.js src/main.ts
@@ -437,11 +524,14 @@ node dist/scripts/validate-llm.js src/main.ts
 npm start
 ```
 
-## Roadmap
+## Release status
 
-Core product scope is complete. Items below marked **done** ship in this repo; archived ideas are struck through (not planned for the default install path).
+The v0.5.6 source is a release candidate. `npm run qa` is the required local
+gate. Public npm deployment and the plugin pin are separate release actions;
+do not call v0.5.6 deployed until both complete.
 
-- [x] npm publish (`@gatemcp/cli`)
+- [x] Published stable package (`@gatemcp/cli@0.5.5`)
+- [ ] Publish `@gatemcp/cli@0.5.6`, then align the plugin pin
 - [x] Proxy mode (`gate_proxy_tools` + `gate_proxy_call`)
 - [x] Tier 2 optional native parsers (PHP, Ruby, Kotlin, Bash, Swift; Vue/Svelte/YAML regex fallback when native grammar unavailable)
 - [x] SQLite-backed dedup cache (`.gate-mcp/cache.db`)
@@ -455,6 +545,32 @@ Core product scope is complete. Items below marked **done** ship in this repo; a
 ## Changelog
 
 <details open>
+<summary><strong>v0.5.6 release candidate</strong> — Codex plugin, doctor, measurable session statistics</summary>
+
+**Codex installation.** Adds a repository marketplace, validated Codex plugin,
+and pinned MCP server command. The active session must be restarted after
+installation.
+
+**Diagnostics.** Adds `gatemcp doctor` with executable, dependency, project
+root, permission, cache, MCP initialize, and tool-discovery checks. Failures
+are structured and logs remain on `stderr`.
+
+**Metrics.** `gate_session_stats` now reports files considered/compressed,
+input/output bytes, estimated tokens before/after, cache hits, and elapsed time
+with exact cache-hit aggregation semantics.
+
+**Tests.** Adds raw JSON-RPC and isolated plugin-command acceptance tests,
+including large JSON compression, framing, errors, and graceful shutdown.
+
+**Production hardening.** Adds canonical realpath boundaries, symlink-escape
+rejection, project-isolated storage, cache identity/schema migration, JSON
+schema outlines, serialized-result metrics, strict SQLite probes, bounded file
+inputs, secure-by-default proxy execution, dependency audit overrides, and CI
+across supported Node and operating-system targets.
+
+</details>
+
+<details>
 <summary><strong>v0.5.5</strong> — Honest metrics, <code>gate_init</code>, YAML structure mode</summary>
 
 **Metrics.** `expanded: true` when compressed output is larger than raw; `savingsPercent` never fakes positive savings. Dedup stats clamp negative “tokens saved”. `graphify_map` sets `originalTokens` from full `GRAPH_REPORT.md`.
@@ -465,7 +581,7 @@ Core product scope is complete. Items below marked **done** ship in this repo; a
 
 **Graphify.** `rebuild=true` on `gate_graph_query` runs `graphify update .` when the graphify CLI is on PATH. Stale report warning when report commit ≠ `git HEAD`.
 
-**Tests.** 40 unit tests; `npm run validate:algo` for nested `graphify-out` layouts (e.g. AlgoTrading SMC).
+**Tests.** Run `npm test`; use `npm run validate:algo` for nested `graphify-out` layouts such as AlgoTrading SMC.
 
 </details>
 
@@ -498,7 +614,7 @@ Core product scope is complete. Items below marked **done** ship in this repo; a
 
 **Optional native parsers** (pinned for `tree-sitter@^0.21` peers): `tree-sitter-php`, `tree-sitter-ruby`, `tree-sitter-kotlin`, `tree-sitter-bash`, `tree-sitter-swift`. Vue / Svelte / YAML packages remain optional installs for forward compatibility; loaders stay disabled where NAN bindings or native compile break against the bundled runtime (details in `src/lib/astParser.ts`).
 
-**VS Code:** `vscode-extension/` — JSON snippets (`gatemcp-mcp`, `gatemcp-cursor-mcp`) plus README task template for `npx -y @gatemcp/cli`.
+**VS Code:** `vscode-extension/` — JSON snippets (`gatemcp-mcp`, `gatemcp-cursor-mcp`) plus a README task template for the installed `gatemcp` binary.
 
 **Tests:** Stress suite exercises `test-fixtures/tier2/*` one path per grammar; assertions run only when the optional grammar loads.
 
@@ -516,13 +632,15 @@ Core product scope is complete. Items below marked **done** ship in this repo; a
 | **YAML / config** | Use `depth: structure` (or default signature on `.yaml`) — avoid `summary` on config files. |
 | **Flow detection** | `.js` files with `@flow` / `@noflow` anywhere in the first 4KB route to the TSX grammar (heuristic; rare comment false positives possible). |
 | **Image auto mode** | OCR confidence 30–70% defaults to **visual** (resize), not text extraction — terminal screenshots may stay as images. |
-| **Memory fallback** | Without `better-sqlite3`, `gate_memory` uses `.gate-mcp/memory.json` (no cross-IDE WAL). Install optional dep or use same machine build for SQLite path. |
+| **Memory fallback** | Without `better-sqlite3`, `gate_memory` uses bounded atomic JSON with a cooperative lock; use strict doctor when SQLite/WAL is required. |
 | **Tier 2 grammars** | Vue / Svelte / YAML optional deps may not load on all platforms; regex fallback still applies. |
+| **Proxy execution** | Disabled by default. Review the project config, then set `GATE_ENABLE_PROXY=1` explicitly. |
 
 <details>
-<summary><strong>v0.5.0</strong> — proxy mode: compress your other MCP servers' schemas (70-90% MCP-overhead savings)</summary>
+<summary><strong>v0.5.0</strong> — proxy mode and historical modeled schema-overhead estimates</summary>
 
-Available on npm as `@gatemcp/cli@0.5.0` — `npm install -g @gatemcp/cli` will land this version.
+This release was published as `@gatemcp/cli@0.5.0`. The unpinned install
+command now resolves the latest published Gate version.
 
 </details>
 
@@ -537,7 +655,7 @@ Available on npm as `@gatemcp/cli@0.5.0` — `npm install -g @gatemcp/cli` will 
 
 **Test fixture.** Ships with a deterministic mock MCP server (built from source only, excluded from the published tarball) so the test suite covers spawn → list → describe → call → timeout → cleanup end-to-end. 8 new unit tests at 25 total.
 
-Benchmark on a 10-server / 50-tool typical roster: **~70-90%** reduction in per-turn MCP schema overhead. Use `gate_proxy_tools` with `action: 'list'` once per session, then `action: 'describe'` only before invoking a tool the LLM hasn't seen the full schema for yet.
+The v0.5.0 release used a modeled 10-server / 50-tool roster to estimate schema-overhead reduction. This was not an end-to-end host measurement. Use `gate_proxy_tools` with `action: 'list'` once per session, then `action: 'describe'` only before invoking a tool whose full schema is required.
 
 See [`.gate-mcp/proxy-servers.example.json`](./.gate-mcp/proxy-servers.example.json) for a starting config.
 </details>
@@ -545,7 +663,9 @@ See [`.gate-mcp/proxy-servers.example.json`](./.gate-mcp/proxy-servers.example.j
 <details>
 <summary><strong>v0.4.0</strong> — published to npm as <code>@gatemcp/cli</code> + persistent dedup cache (SQLite/WAL)</summary>
 
-**npm publish.** Available as `npm install -g @gatemcp/cli` (or `npx -y @gatemcp/cli` for zero-install use). Scoped under the [@gatemcp](https://www.npmjs.com/org/gatemcp) organization. The unscoped name `gatemcp` is rejected by npm's similarity check against the pre-existing `gate-mcp` package (Gate.io's crypto MCP) so the scoped name is the canonical distribution name. CLI binary name remains `gatemcp` for terminal use.
+**npm publish.** This version established the `@gatemcp/cli` scoped package.
+The unscoped name `gatemcp` was rejected by npm's similarity check against the
+pre-existing `gate-mcp` package. The CLI binary remains `gatemcp`.
 
 **Persistent dedup cache.** The session dedup cache is now **persistent across IDE restarts** and safe for **concurrent IDEs**. The previous in-memory `Map` is replaced with a SQLite database (WAL journal mode, NORMAL synchronous) at `<projectRoot>/.gate-mcp/cache.db` (override with `GATE_CACHE_DB`).
 

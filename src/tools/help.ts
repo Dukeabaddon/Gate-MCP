@@ -1,7 +1,8 @@
 /**
  * gate_help — Tool documentation registry.
  *
- * Enables terse tool descriptions in ListTools (saving ~90% schema tokens)
+ * Enables terse tool descriptions in ListTools while providing full
+ * documentation on demand through this meta-tool.
  * while providing full documentation on demand via this meta-tool.
  *
  * Inspired by Atlassian's mcp-compressor lazy-loading pattern.
@@ -40,7 +41,7 @@ Returns token savings metrics.
 - Before including images in context
 - For screenshots: use intent='text' to extract content as text
 - For diagrams/photos: use intent='visual' to reduce resolution
-- Typical savings: 76-97%`,
+- Savings depend on the input and are measured in every result`,
 
   gate_compress_file: `# gate_compress_file
 AST-based code compression via tree-sitter. Extracts function signatures,
@@ -48,16 +49,17 @@ class definitions, imports, and type declarations — discarding implementation.
 
 ## Parameters
 - filePath (required): Path to the source file
-- depth (optional): 'signature' | 'summary' | 'full' (default: 'signature')
+- depth (optional): 'signature' | 'summary' | 'structure' | 'full' (default: 'signature')
   - 'signature': Function names, params, return types, imports only
   - 'summary': One-line per function with brief description
+  - 'structure': Keys/headings for YAML, JSON, and Markdown
   - 'full': Returns raw file content (baseline comparison)
 
 ## When to use
 - When you need to understand a file's API without reading implementation
 - Before adding files to context window
-- Supports: TypeScript, JavaScript, Python, and plain text
-- Typical savings: 46-94%
+- Supports the parser set installed for this Gate runtime, with safe fallbacks
+- Savings depend on file type, depth, and content and are measured per result
 - Auto-caches results (repeated reads are nearly free via gate_dedup_context)`,
 
   gate_graph_query: `# gate_graph_query
@@ -112,9 +114,10 @@ Automatically integrated into gate_compress_file.
 
 ## When to use
 - Automatically used by gate_compress_file (no manual calls needed)
-- Use 'stats' to see cache analytics (hits, tokens saved)
+- Use 'stats' to see cache activity and raw-vs-cached-view token deltas
 - Use 'clear' to reset cache
-- Repeated file reads cost ~15 tokens instead of 150+`,
+- Explicit unchanged checks return a measured reference-only response
+- gate_compress_file cache hits still return the full compressed view`,
 
   gate_clean_response: `# gate_clean_response
 TOON (Token-Optimized Object Notation) JSON compressor.
@@ -132,7 +135,7 @@ Arrays of objects → pipe-delimited tables.
 ## When to use
 - Compress verbose JSON API responses before including in context
 - Use 'whitelist' to drop unneeded fields (e.g., keep only id, name, status)
-- Typical savings: 37% (arrays), 81% (whitelist)`,
+- Savings depend on the input and are measured in every result`,
 
   gate_proxy_tools: `# gate_proxy_tools
 Compressed catalog of every tool from your downstream MCP servers
@@ -168,11 +171,13 @@ Create .gate-mcp/proxy-servers.json in your project root:
 }
 \`\`\`
 Override the config path with GATE_PROXY_CONFIG env var.
+Proxy execution is disabled by default. Set GATE_ENABLE_PROXY=1 in the Gate
+server environment only after reviewing every configured command.
 
 ## When to use
 - When you have 5+ MCP servers configured and per-turn schema overhead is hurting context budget
 - Use 'list' once per session to discover; the LLM should call 'describe' only before invoking a specific tool
-- Typical savings on a 10-server roster: 70-90% of MCP schema overhead`,
+- Savings are reported from the actual catalog returned for your roster`,
 
   gate_proxy_call: `# gate_proxy_call
 Forward a tool invocation to a downstream MCP server through gatemcp's
@@ -254,6 +259,29 @@ Onboarding / health check for a project root.
 - First message in a new repo or after pulling graphify-out changes
 - Before graphify_map / compress_file on monorepos with nested graphify-out`,
 
+  gate_session_stats: `# gate_session_stats
+Measured compression work for the current MCP process plus persistent dedup
+cache totals.
+
+## Current-process measurements
+- files_considered: every successful, schema-valid gate_compress_file result
+- files_compressed: successful non-full results that performed new work
+- input_bytes: UTF-8 file bytes considered, including cache-hit requests
+- output_bytes: serialized Gate result bytes, excluding the MCP/JSON-RPC envelope
+- measurement_scope: exact boundary used for output byte/token accounting
+- estimated_tokens_before / estimated_tokens_after: tokenizer estimates
+- cache_hits: calls served from the dedup cache
+- elapsed_ms: cumulative request time, including cache hits
+- session_elapsed_ms: wall-clock time since this server process started
+
+Cache hits increment files_considered and cache_hits and add the bytes, tokens,
+and elapsed time actually handled by that request.
+
+## Persistent cache totals
+- totalEntries / totalHits / totalTokensSaved
+- topEntries: highest-value cached files
+- persistentCache: true when SQLite is active`,
+
   recommended_stack: `# recommended_stack — Token-saving workflow
 
 ## Layer order (do this before full Read)
@@ -275,7 +303,7 @@ Onboarding / health check for a project root.
 
 ## Quick commands
 - gate_help tool='gate_graph_query'
-- gate_session_stats — cumulative cache savings
+- gate_session_stats — measured current-process work plus cache activity
 - gate_help tool='directory' — all tools`,
 };
 
@@ -288,19 +316,19 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
   // Directory mode — list all tools with one-line descriptions
   if (!tool || tool === "all" || tool === "directory") {
     const directory = [
-      "# gatemcp Tool Directory (v0.5.5)",
+      "# gatemcp Tool Directory (v0.5.6)",
       "",
       "| Tool | Purpose |",
       "|---|---|",
-      "| gate_optimize_image | Compress images via OCR/downscale (76-97% savings) |",
+      "| gate_optimize_image | Compress images via OCR/downscale with per-result metrics |",
       "| gate_compress_file | AST/structure compression (signature/structure/summary/full) |",
       "| gate_graph_query | Symbol graph + graphify map (graphify_* queryTypes) |",
       "| gate_memory | Cross-session key-value persistence |",
       "| gate_dedup_context | SHA-256 session dedup cache (auto-integrated, SQLite-backed) |",
       "| gate_init | Project health: graphify, cache path, MCP slug hint |",
-      "| gate_session_stats | Cumulative session token savings from dedup cache |",
-      "| gate_clean_response | TOON JSON compressor (37-81% savings) |",
-      "| gate_proxy_tools | Compressed catalog of downstream MCP servers (70-90% schema savings) |",
+      "| gate_session_stats | Measured bytes/tokens/work plus dedup cache activity |",
+      "| gate_clean_response | TOON JSON compressor with per-result metrics |",
+      "| gate_proxy_tools | Opt-in downstream catalog; requires GATE_ENABLE_PROXY=1 |",
       "| gate_proxy_call | Forward a downstream MCP tool call through gatemcp's compressor |",
       "| gate_validate_compression | LLM-in-the-loop 0-100 quality score for a file's compressed view |",
       "| gate_help | Full docs; tool='recommended_stack' for navigation playbook |",

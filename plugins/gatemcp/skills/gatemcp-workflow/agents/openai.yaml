@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gate MCP Workflow"
+  short_description: "Map and compress repositories with Gate"
+  default_prompt: "Use Gate to map this repository, compress relevant files, and report measured savings."

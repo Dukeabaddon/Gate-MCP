@@ -1,7 +1,7 @@
 {
   "name": "vscode-gatemcp",
   "displayName": "gatemcp MCP snippets",
-  "description": "JSON snippets and task template for running @gatemcp/cli (npx) as an MCP server.",
+  "description": "JSON snippets and a task template for running the installed Gate MCP CLI.",
   "version": "0.1.0",
   "publisher": "gatemcp",
   "engines": {
