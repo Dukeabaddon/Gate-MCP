@@ -28,8 +28,8 @@ assert.equal(manifest.mcpServers, "./.mcp.json");
 assert.equal(marketplace.name, "dukeabaddon-gate-mcp");
 assert.equal(marketplace.plugins?.[0]?.name, "gatemcp");
 assert.equal(marketplace.plugins?.[0]?.source?.path, "./plugins/gatemcp");
-assert.equal(server?.command, "npm");
-assert.equal(server?.args?.[0], "exec");
+assert.equal(server?.command, "node");
+assert.equal(server?.args?.[0], "${PLUGIN_ROOT}/scripts/launch.mjs");
 assert.ok(server?.args?.includes("--yes"));
 assert.ok(server?.args?.includes("--strict-allow-scripts"));
 assert.ok(
@@ -41,12 +41,27 @@ assert.ok(server?.args?.includes("--package=@gatemcp/cli@0.5.5"));
 assert.deepEqual(server?.args?.slice(-2), ["--", "gatemcp"]);
 assert.ok(!JSON.stringify(server).includes(repositoryRoot));
 
-const transportCommand = server.command;
+const transportCommand = process.execPath;
+const installedArgs = server.args.map((arg) =>
+  arg.replaceAll("${PLUGIN_ROOT}", installedPluginRoot),
+);
 const transportArgs = packageOverride
-  ? server.args.map((arg) =>
+  ? installedArgs.map((arg) =>
       arg.startsWith("--package=") ? `--package=${packageOverride}` : arg,
     )
-  : server.args;
+  : installedArgs;
+const npmCacheRoot = path.join(isolatedRoot, "plugin-npm-cache");
+const brokenExecEntry = path.join(
+  npmCacheRoot,
+  "_npx",
+  "ff6fc64b617c0d7c",
+);
+fs.mkdirSync(path.join(brokenExecEntry, "node_modules"), { recursive: true });
+fs.writeFileSync(
+  path.join(npmCacheRoot, ".gatemcp-plugin-cache-v1"),
+  "test-owned cache\n",
+);
+fs.writeFileSync(path.join(brokenExecEntry, "package-lock.json"), "{}\n");
 
 const transport = new StdioClientTransport({
   command: transportCommand,
@@ -56,7 +71,7 @@ const transport = new StdioClientTransport({
   env: {
     ...process.env,
     GATE_PROJECT_ROOT: repositoryRoot,
-    npm_config_cache: path.join(isolatedRoot, "npm-cache"),
+    GATE_PLUGIN_NPM_CACHE: npmCacheRoot,
   },
 });
 let stderr = "";
@@ -93,6 +108,16 @@ const invoke = async (name, args = {}) => {
 
 try {
   await withTimeout(client.connect(transport), "plugin command initialize");
+  const repairedPackageJson = path.join(brokenExecEntry, "package.json");
+  if (fs.existsSync(brokenExecEntry)) {
+    assert.ok(
+      fs.existsSync(repairedPackageJson),
+      "npm reused the repaired entry without rebuilding package.json",
+    );
+    assert.doesNotThrow(() =>
+      JSON.parse(fs.readFileSync(repairedPackageJson, "utf8")),
+    );
+  }
 
   const listed = await withTimeout(client.listTools(), "plugin command tools/list");
 
@@ -151,6 +176,7 @@ try {
         requiredTools,
         invokedTools: requiredTools,
         persistentCache: init.cache.persistent,
+        repairedIncompleteExecCache: true,
         measurementScope: stats.measurement_scope ?? null,
         stderrBytes: Buffer.byteLength(stderr),
       },

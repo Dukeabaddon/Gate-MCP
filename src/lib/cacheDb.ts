@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import type { Database as BetterSqliteDatabase, Statement } from "better-sqlite3";
-import { safeResolve } from "./pathGuard.js";
+import { getActiveProjectRoot, safeResolve } from "./pathGuard.js";
 import logger from "./logger.js";
 
 const require = createRequire(import.meta.url);
@@ -140,9 +140,7 @@ function hardenDatabaseFiles(dbPath: string): void {
 }
 
 function canonicalDirectory(projectRoot?: string): string {
-  const candidate = path.resolve(
-    projectRoot ?? process.env.GATE_PROJECT_ROOT ?? process.cwd()
-  );
+  const candidate = path.resolve(projectRoot ?? getActiveProjectRoot());
   try {
     return fs.realpathSync.native(candidate);
   } catch {

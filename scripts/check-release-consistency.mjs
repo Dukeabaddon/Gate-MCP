@@ -38,6 +38,16 @@ assert.equal(pkg.version, sourceMatch[1], "package and source versions differ");
 assert.equal(lock.version, pkg.version, "package-lock root version differs");
 assert.equal(lock.packages?.[""]?.version, pkg.version, "lock package version differs");
 assert.ok(pluginPin, "plugin MCP command has no exact @gatemcp/cli pin");
+assert.equal(
+  mcp.mcpServers?.gatemcp?.command,
+  "node",
+  "plugin MCP command does not use the recovery launcher",
+);
+assert.equal(
+  mcp.mcpServers?.gatemcp?.args?.[0],
+  "${PLUGIN_ROOT}/scripts/launch.mjs",
+  "plugin MCP command does not resolve the repo-owned recovery launcher",
+);
 assert.ok(
   mcp.mcpServers?.gatemcp?.args?.includes("--strict-allow-scripts"),
   "plugin MCP command does not enforce explicit install-script approvals",

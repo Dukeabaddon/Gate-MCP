@@ -9,7 +9,7 @@ Use Gate as an explicit context layer. Keep ordinary file reads and searches sep
 
 ## Workflow
 
-1. Call `gate_init` once for the current repository.
+1. Call `gate_init` once for the current repository. It activates that root for later relative paths.
 2. If Graphify is available, start with `gate_graph_query` using `graphify_map`. Otherwise use graph statistics or targeted search.
 3. Query symbols and paths before requesting full file bodies.
 4. Use `gate_compress_file` with `signature` for code and `structure` for JSON, YAML, Markdown, and configuration files.

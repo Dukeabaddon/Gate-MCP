@@ -67,7 +67,7 @@ Two layers (use both):
 1. **Symbol graph** (tree-sitter) — imports, functions, classes in code files
 2. **Graphify bridge** — reads graphify-out/GRAPH_REPORT.md (communities, god nodes)
 
-Nested graphify (e.g. crypto/.../smc/graphify-out/) is auto-discovered by walking up from projectRoot/cwd.
+Nested graphify (e.g. crypto/.../smc/graphify-out/) is auto-discovered by walking up from the active project root.
 
 ## Parameters
 - query (required): Symbol name, file name, hub name, or community term
@@ -75,7 +75,7 @@ Nested graphify (e.g. crypto/.../smc/graphify-out/) is auto-discovered by walkin
   - Symbol: 'search' | 'depends_on' | 'dependents' | 'file_symbols' | 'stats'
   - Graphify: 'graphify_hubs' | 'graphify_search' | 'graphify_map'
   - 'search' with 0 symbol hits → auto appends graphify_search if GRAPH_REPORT.md exists
-- projectRoot (optional): Code index root (default: cwd or GATE_PROJECT_ROOT)
+- projectRoot (optional): Code index root (default: root selected by gate_init)
 - rebuild (optional): Force symbol graph rebuild
 
 ## When to use
@@ -96,7 +96,7 @@ Cross-session key-value persistence (v0.5.2).
 - action (required): 'read' | 'write' | 'delete' | 'list' | 'clear'
 - key (required): Memory key identifier (use '*' for list/clear)
 - value (optional): Value to store (required for 'write')
-- projectRoot (optional): Project root (default: cwd)
+- projectRoot (optional): Project root (default: root selected by gate_init)
 
 ## When to use
 - Persist decisions or findings across sessions
@@ -244,16 +244,17 @@ This tool. Returns full documentation for any Gate-MCP tool.
 - When tool descriptions seem terse — this is the full reference`,
 
   gate_init: `# gate_init
-Onboarding / health check for a project root.
+Onboarding / health check that activates a project root for later relative paths.
 
 ## Parameters
-- projectRoot (optional): defaults to cwd or GATE_PROJECT_ROOT
+- projectRoot (optional): root to activate; defaults to cwd or GATE_PROJECT_ROOT
 
 ## Returns
 - mcpSlugHint: Cursor may show server as user-gatemcp
 - graphify: report path, stale warning, workspace root for map queries
 - cache: dedup DB path and hit stats
 - recommendedProjectRoots: use SMC subfolder when graphify lives nested
+- Later relative file paths and omitted projectRoot values use this active root
 
 ## When to use
 - First message in a new repo or after pulling graphify-out changes

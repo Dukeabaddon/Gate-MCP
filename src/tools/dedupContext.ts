@@ -36,7 +36,10 @@ import {
 } from "../lib/cacheDb.js";
 import type { CompressionDepth } from "../types.js";
 import { detectLanguage } from "../lib/astParser.js";
-import { safeResolveExistingFile } from "../lib/pathGuard.js";
+import {
+  getActiveProjectRoot,
+  safeResolveExistingFile,
+} from "../lib/pathGuard.js";
 
 /**
  * Backwards-compatible CacheEntry shape returned to the rest of the codebase.
@@ -193,6 +196,7 @@ export async function handleDedupContext(args: {
 
     const absPath = safeResolveExistingFile(args.filePath, {
       caller: "gate_dedup_context",
+      projectRoot: getActiveProjectRoot(),
     });
 
     const currentHash = computeFileHash(absPath);
@@ -257,6 +261,7 @@ export async function handleDedupContext(args: {
 
     const absPath = safeResolveExistingFile(args.filePath, {
       caller: "gate_dedup_context",
+      projectRoot: getActiveProjectRoot(),
     });
     const hash = computeFileHash(absPath);
     const tokens = countTextTokens(args.content);
@@ -305,6 +310,7 @@ export function checkCache(
   try {
     const absPath = safeResolveExistingFile(filePath, {
       caller: "gate_dedup_context:auto-check",
+      projectRoot: getActiveProjectRoot(),
     });
     const currentHash = computeFileHash(absPath);
     const identity = compressionIdentity(currentHash, depth, language);
@@ -342,6 +348,7 @@ export function storeInCache(
   try {
     const absPath = safeResolveExistingFile(filePath, {
       caller: "gate_dedup_context:auto-store",
+      projectRoot: getActiveProjectRoot(),
     });
     const hash = computeFileHash(absPath);
     const tokens = countTextTokens(content);

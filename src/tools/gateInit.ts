@@ -6,13 +6,13 @@ import path from "node:path";
 import {
   findGraphifyReport,
   graphifyWorkspaceRoot,
-  resolveCodeRoot,
 } from "../lib/projectRoot.js";
 import { graphifyStaleWarning } from "../lib/graphifyFreshness.js";
 import { isGraphifyCliAvailable } from "../lib/graphifyRunner.js";
 import { cacheDbPath, isPersistent, getStats } from "../lib/cacheDb.js";
 import { GATEMCP_VERSION } from "../version.js";
 import logger from "../lib/logger.js";
+import { activateProjectRoot } from "../lib/pathGuard.js";
 
 export interface GateInitResult {
   version: string;
@@ -39,7 +39,7 @@ export interface GateInitResult {
 export async function handleGateInit(args: {
   projectRoot?: string;
 }): Promise<GateInitResult> {
-  const projectRoot = resolveCodeRoot(args.projectRoot);
+  const projectRoot = activateProjectRoot(args.projectRoot);
   const reportPath = findGraphifyReport(projectRoot);
   const workspaceRoot = reportPath ? graphifyWorkspaceRoot(reportPath) : null;
   const staleWarning =

@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   getAllowedProjectRoot,
+  getActiveProjectRoot,
   isPathWithin,
   resolveProjectRoot,
   safeResolve,
@@ -77,5 +78,7 @@ export function graphifyWorkspaceRoot(reportPath: string): string {
  * workspace root, but cannot widen it.
  */
 export function resolveCodeRoot(explicit?: string): string {
-  return resolveProjectRoot(explicit, { caller: "resolveCodeRoot" });
+  return resolveProjectRoot(explicit ?? getActiveProjectRoot(), {
+    caller: "resolveCodeRoot",
+  });
 }

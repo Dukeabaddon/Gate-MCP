@@ -246,9 +246,13 @@ The checked-in plugin pins the currently published npm server,
 `@gatemcp/cli@0.5.5`. Source-only changes in this repository become available
 through the marketplace after that package pin is updated to a published
 release. Until then, test the source build with `node dist/main.js doctor`.
-The plugin uses explicit `npm exec --package` resolution and a strict native
-build allowlist. This keeps SQLite available on a fresh npm 12 install without
-allowing unrelated dependency scripts.
+The plugin uses a repository-owned launcher around explicit
+`npm exec --package` resolution and a strict native build allowlist. The
+launcher keeps a reusable Gate-only npm cache, removes incomplete `_npx`
+entries before startup, and rebuilds that cache once when npm reports the
+known missing-`package.json` failure. It never installs the package globally.
+This keeps SQLite available on a fresh npm 12 install without allowing
+unrelated dependency scripts.
 
 ### Installation diagnostics
 
@@ -273,6 +277,11 @@ same smoke runs automatically before npm publication.
 `npm run test:plugin` separately tests the exact network-backed command pinned
 in `.mcp.json`. It is intentionally outside `prepublishOnly` because it tests
 the already-published package rather than the source being released.
+
+`npm run test:plugin-launcher` is deterministic and network-free. It verifies
+preflight repair, one retry after the known incomplete `_npx` failure, and that
+the user's normal npm cache is never removed. `npm run test:package` also runs
+the launcher against the locally packed release candidate.
 
 ### Measured session statistics
 

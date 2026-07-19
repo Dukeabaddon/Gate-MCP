@@ -38,7 +38,10 @@ import {
   type LlmProviderName,
   type LlmAnswer,
 } from "../lib/llmProvider.js";
-import { safeResolveExistingFile } from "../lib/pathGuard.js";
+import {
+  getActiveProjectRoot,
+  safeResolveExistingFile,
+} from "../lib/pathGuard.js";
 import logger from "../lib/logger.js";
 
 // ─── Input / output types ───────────────────────────────────────────────────
@@ -96,7 +99,9 @@ export async function handleValidateCompression(
   if (!filePath) {
     throw new Error("gate_validate_compression requires filePath");
   }
-  const resolved = safeResolveExistingFile(filePath, { projectRoot });
+  const resolved = safeResolveExistingFile(filePath, {
+    projectRoot: projectRoot ?? getActiveProjectRoot(),
+  });
   const truth = buildGroundTruth(resolved);
   const prompts = buildValidationPrompts(truth);
 

@@ -16,7 +16,10 @@ import {
   calculateSavings,
   formatSavingsNote,
 } from "../lib/tokenCounter.js";
-import { safeResolveExistingFile } from "../lib/pathGuard.js";
+import {
+  getActiveProjectRoot,
+  safeResolveExistingFile,
+} from "../lib/pathGuard.js";
 import logger from "../lib/logger.js";
 import type { CompressionDepth, CompressFileResult } from "../types.js";
 import { checkCache, storeInCache } from "./dedupContext.js";
@@ -70,6 +73,7 @@ export async function handleCompressFile(args: {
 
   const filePath = safeResolveExistingFile(args.filePath, {
     caller: "gate_compress_file",
+    projectRoot: getActiveProjectRoot(),
   });
 
   logger.info(`Compressing file: ${filePath} (depth=${depth})`);

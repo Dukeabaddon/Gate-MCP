@@ -14,8 +14,10 @@ const { countTextTokens } = await import(
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gatemcp-acceptance-"));
 const cachePath = path.join(fixtureRoot, ".gate-mcp", "acceptance-cache.db");
 fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+const activeProjectRoot = path.join(fixtureRoot, "active-project");
+fs.mkdirSync(activeProjectRoot, { recursive: true });
 
-const symbolPath = path.join(fixtureRoot, "important.ts");
+const symbolPath = path.join(activeProjectRoot, "important.ts");
 fs.writeFileSync(
   symbolPath,
   [
@@ -26,7 +28,7 @@ fs.writeFileSync(
   ].join("\n"),
 );
 
-const jsonPath = path.join(fixtureRoot, "large.json");
+const jsonPath = path.join(activeProjectRoot, "large.json");
 const records = Array.from({ length: 30_000 }, (_, index) => ({
   id: index,
   slug: `record-${index}`,
@@ -163,10 +165,10 @@ try {
   assert.equal(initialStats.cache_hits, 0);
 
   const init = toolPayload(
-    await callTool("gate_init", { projectRoot: fixtureRoot }),
+    await callTool("gate_init", { projectRoot: activeProjectRoot }),
     "gate_init",
   );
-  assert.equal(init.projectRoot, fixtureRoot);
+  assert.equal(init.projectRoot, activeProjectRoot);
 
   const help = toolPayload(await callTool("gate_help"), "gate_help");
   for (const name of requiredTools) {
@@ -175,7 +177,6 @@ try {
 
   const graph = toolPayload(
     await callTool("gate_graph_query", {
-      projectRoot: fixtureRoot,
       query: "acceptanceImportantSymbol",
       queryType: "search",
       rebuild: true,
@@ -187,10 +188,18 @@ try {
     graph.result.includes("acceptanceImportantSymbol"),
     "graph search missed the known symbol",
   );
+  assert.equal(
+    graph.indexedRoot,
+    activeProjectRoot,
+    "gate_graph_query did not inherit gate_init projectRoot",
+  );
 
   const compressionStart = performance.now();
   const first = toolPayload(
-    await callTool("gate_compress_file", { filePath: jsonPath, depth: "structure" }),
+    await callTool("gate_compress_file", {
+      filePath: "large.json",
+      depth: "structure",
+    }),
     "first compression",
   );
   const compressionMs = performance.now() - compressionStart;
@@ -205,7 +214,10 @@ try {
   assert.ok(compressionMs < 15_000, `large JSON took ${compressionMs}ms`);
 
   const second = toolPayload(
-    await callTool("gate_compress_file", { filePath: jsonPath, depth: "structure" }),
+    await callTool("gate_compress_file", {
+      filePath: "large.json",
+      depth: "structure",
+    }),
     "cached compression",
   );
   assert.match(second.note, /\[DEDUP\]/);

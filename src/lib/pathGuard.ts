@@ -36,6 +36,13 @@ export interface ResolveProjectRootOptions {
   caller?: string;
 }
 
+interface ActiveProjectRoot {
+  allowedRoot: string;
+  projectRoot: string;
+}
+
+let activeProjectRoot: ActiveProjectRoot | null = null;
+
 function boundaryDisabled(): boolean {
   return process.env.GATE_ALLOW_ANY_PATH === "1";
 }
@@ -135,6 +142,40 @@ function assertContained(candidate: string, boundary: string): void {
 export function getAllowedProjectRoot(): string {
   const configured = process.env.GATE_PROJECT_ROOT?.trim() || process.cwd();
   return canonicalExistingDirectory(configured, "Configured project root");
+}
+
+/**
+ * Return the project selected by gate_init. The configured startup root remains
+ * the immutable security boundary; an active root may only narrow it.
+ */
+export function getActiveProjectRoot(): string {
+  const allowedRoot = getAllowedProjectRoot();
+  const active = activeProjectRoot;
+  if (!active || active.allowedRoot !== allowedRoot) return allowedRoot;
+
+  try {
+    const canonical = canonicalExistingDirectory(
+      active.projectRoot,
+      "Active project root"
+    );
+    if (boundaryDisabled() || isPathWithin(allowedRoot, canonical)) {
+      return canonical;
+    }
+  } catch {
+    // Fall back to the configured boundary when the active directory vanished.
+  }
+  activeProjectRoot = null;
+  return allowedRoot;
+}
+
+/** Select the default root used by subsequent project-relative tool calls. */
+export function activateProjectRoot(requested?: string): string {
+  const allowedRoot = getAllowedProjectRoot();
+  const projectRoot = resolveProjectRoot(requested, {
+    caller: "gate_init",
+  });
+  activeProjectRoot = { allowedRoot, projectRoot };
+  return projectRoot;
 }
 
 /**

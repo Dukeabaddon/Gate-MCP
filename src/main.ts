@@ -135,7 +135,7 @@ server.registerTool(
       projectRoot: z
         .string()
         .optional()
-        .describe("Project root directory (defaults to cwd)"),
+        .describe("Project root directory (defaults to the root selected by gate_init)"),
       queryType: z
         .enum([
           "depends_on",
@@ -203,7 +203,7 @@ server.registerTool(
       projectRoot: z
         .string()
         .optional()
-        .describe("Project root directory (defaults to cwd)"),
+        .describe("Project root directory (defaults to the root selected by gate_init)"),
     }),
   },
   async (args) => {
@@ -363,7 +363,7 @@ server.registerTool(
       projectRoot: z
         .string()
         .optional()
-        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
+        .describe("Project root (defaults to the root selected by gate_init)."),
     }),
   },
   async (args) => {
@@ -428,7 +428,7 @@ server.registerTool(
       projectRoot: z
         .string()
         .optional()
-        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
+        .describe("Project root (defaults to the root selected by gate_init)."),
       timeoutMs: z
         .number()
         .optional()
@@ -504,7 +504,7 @@ server.registerTool(
       projectRoot: z
         .string()
         .optional()
-        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
+        .describe("Project root (defaults to the root selected by gate_init)."),
     }),
   },
   async (args) => {
@@ -543,7 +543,7 @@ server.registerTool(
       projectRoot: z
         .string()
         .optional()
-        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)"),
+        .describe("Project root to activate (defaults to cwd / GATE_PROJECT_ROOT)"),
     }),
   },
   async (args) => {

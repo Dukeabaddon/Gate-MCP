@@ -1,6 +1,6 @@
 {
   "name": "gatemcp",
-  "version": "0.5.5+codex.20260718070120",
+  "version": "0.5.5+codex.20260719044240",
   "description": "Local MCP context compression, repository graph navigation, and measurable token savings for Codex.",
   "author": {
     "name": "Gate MCP contributors",

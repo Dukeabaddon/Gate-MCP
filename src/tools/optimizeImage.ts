@@ -15,7 +15,10 @@ import {
   countTextTokens,
   calculateSavings,
 } from "../lib/tokenCounter.js";
-import { safeResolveExistingFile } from "../lib/pathGuard.js";
+import {
+  getActiveProjectRoot,
+  safeResolveExistingFile,
+} from "../lib/pathGuard.js";
 import logger from "../lib/logger.js";
 import type { ImageIntent, ImageOptimizeResult } from "../types.js";
 
@@ -31,6 +34,7 @@ export async function handleOptimizeImage(args: {
   // 1. Resolve, sanitize, and verify the path (boundary check, anti-traversal)
   const imagePath = safeResolveExistingFile(args.imagePath, {
     caller: "gate_optimize_image",
+    projectRoot: getActiveProjectRoot(),
   });
 
   logger.info(`Processing image: ${imagePath} (intent=${intent})`);

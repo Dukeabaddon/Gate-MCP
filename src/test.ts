@@ -1252,8 +1252,8 @@ async function runTests(): Promise<void> {
       throw new Error("plugin manifest identity or mcpServers path is invalid");
     }
     if (
-      config?.command !== "npm" ||
-      config.args?.[0] !== "exec" ||
+      config?.command !== "node" ||
+      config.args?.[0] !== "${PLUGIN_ROOT}/scripts/launch.mjs" ||
       !config.args.includes("--strict-allow-scripts") ||
       !config.args
         .find((arg) => arg.startsWith("--allow-scripts="))
@@ -1261,9 +1261,12 @@ async function runTests(): Promise<void> {
       !config.args.includes("--package=@gatemcp/cli@0.5.5") ||
       config.args.slice(-2).join(" ") !== "-- gatemcp"
     ) {
-      throw new Error("plugin server command is not an explicit pinned npm exec");
+      throw new Error("plugin server command is not the pinned recovery launcher");
     }
-    console.error(`  ${PASS} plugin manifest and pinned MCP command are valid`);
+    if (!fs.existsSync(path.join(pluginRoot, "scripts", "launch.mjs"))) {
+      throw new Error("plugin recovery launcher is missing");
+    }
+    console.error(`  ${PASS} plugin manifest and recovery launcher are valid`);
     passed++;
   } catch (err) {
     console.error(`  ${FAIL} Error: ${err}`);
