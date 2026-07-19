@@ -272,6 +272,7 @@ try {
     const rcGateDir = path.join(rcRoot, ".gate-mcp");
     const rcDbPath = path.join(rcGateDir, "cache.db");
     fs.mkdirSync(rcGateDir, { recursive: true });
+    const canonicalRcRoot = fs.realpathSync.native(rcRoot);
     const rcDb = new Database(rcDbPath);
     rcDb.exec(
       `CREATE TABLE cache_entries (
@@ -294,7 +295,7 @@ try {
        CREATE TABLE cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
        INSERT INTO cache_meta VALUES ('schema_version', '3');
        INSERT INTO cache_entries VALUES
-         ('rc-key', '${rcRoot}', '${path.join(rcRoot, "rc.ts")}', 'rc-hash',
+         ('rc-key', '${canonicalRcRoot}', '${path.join(canonicalRcRoot, "rc.ts")}', 'rc-hash',
           'signature', 'typescript', '${COMPRESSOR_CACHE_VERSION}', 3,
           'rc-view', 2, 10, 'file', 0, 1);`
     );
