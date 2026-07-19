@@ -336,8 +336,16 @@ _resetMemoryDbForTests();
 closeCacheDb();
 
 const resolvedTemporaryRoot = fs.realpathSync(temporaryRoot);
+const resolvedOsTemporaryRoot = fs.realpathSync(os.tmpdir());
+const temporaryRelativePath = path.relative(
+  resolvedOsTemporaryRoot,
+  resolvedTemporaryRoot,
+);
 assert.ok(
-  resolvedTemporaryRoot.startsWith(path.resolve(os.tmpdir()) + path.sep),
+  temporaryRelativePath.length > 0 &&
+    !path.isAbsolute(temporaryRelativePath) &&
+    temporaryRelativePath !== ".." &&
+    !temporaryRelativePath.startsWith(`..${path.sep}`),
   `refusing cleanup outside OS temp: ${resolvedTemporaryRoot}`,
 );
 fs.rmSync(resolvedTemporaryRoot, { recursive: true, force: true });

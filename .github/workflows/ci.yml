@@ -50,6 +50,10 @@ jobs:
         with:
           node-version: 26
           cache: npm
+      - name: Install npm 12 for acceptance
+        run: |
+          npm install --prefix "$RUNNER_TEMP/npm12" --ignore-scripts npm@12
+          echo "$RUNNER_TEMP/npm12/node_modules/.bin" >> "$GITHUB_PATH"
       - name: Verify npm 12 install policy
         run: node -e "const major=Number(require('child_process').execFileSync('npm',['--version'],{encoding:'utf8'}).trim().split('.')[0]); if(major!==12) throw new Error('Expected npm 12, got '+major)"
       - run: npm ci
