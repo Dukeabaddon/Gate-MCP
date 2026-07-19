@@ -154,7 +154,12 @@ async function main(): Promise<void> {
         name: "non-existent database output",
         run: () => {
           const output = path.join(workspace, ".gate-mcp", "cache.db");
-          assert.equal(safeResolve(output), path.resolve(output));
+          const expected = path.join(
+            fs.realpathSync.native(workspace),
+            ".gate-mcp",
+            "cache.db"
+          );
+          assert.equal(safeResolve(output), expected);
         },
       },
       {
@@ -224,7 +229,11 @@ async function main(): Promise<void> {
           );
           assert.deepEqual(
             new Set(status.map((row) => row.projectRoot)),
-            new Set([proxyProjectA, proxyProjectB])
+            new Set(
+              [proxyProjectA, proxyProjectB].map((project) =>
+                fs.realpathSync.native(project)
+              )
+            )
           );
         },
       },
