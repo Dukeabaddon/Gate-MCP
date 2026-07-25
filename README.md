@@ -27,7 +27,7 @@ caches unchanged work in SQLite, and labels every savings number with an honest
   <a href="https://github.com/Dukeabaddon/Gate-MCP/stargazers"><img src="https://img.shields.io/github/stars/Dukeabaddon/Gate-MCP?style=social" alt="GitHub Stars"></a>&nbsp;&nbsp;
   <a href="https://github.com/Dukeabaddon/Gate-MCP/actions/workflows/ci.yml"><img src="https://github.com/Dukeabaddon/Gate-MCP/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@gatemcp/cli"><img src="https://img.shields.io/npm/v/@gatemcp/cli?label=npm%20%40gatemcp%2Fcli&color=%23cb3837" alt="npm version"></a>
-  <a href="https://www.npmjs.com/package/@gatemcp/cli"><img src="https://img.shields.io/npm/dm/@gatemcp/cli?label=downloads&color=%23cb3837" alt="npm downloads"></a>
+  <a href="https://www.npmjs.com/package/@gatemcp/cli"><img src="https://img.shields.io/npm/dt/@gatemcp/cli?label=downloads&color=%23cb3837" alt="npm downloads (total)"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/Telemetry-None-brightgreen?logo=shield&logoColor=white" alt="No telemetry">
   <img src="https://img.shields.io/badge/SQLite-Required-informational" alt="SQLite required">
@@ -447,19 +447,6 @@ npm uninstall -g @gatemcp/cli
 ```
 
 Codex: remove the plugin from the Codex UI / plugin list. Source installs: `npm unlink -g` from the clone if you used `npm link`.
-
----
-
-## Comparison
-
-| Feature | Gate-MCP | LeanCTX | Graphify |
-|---|---|---|---|
-| Primary job | MCP compression gateway | Full context runtime | Knowledge graph / communities |
-| Intercepts Read/Bash | No | Hybrid hooks optional | No |
-| LLM request proxy | No | Yes (opt-in) | No |
-| Schema surface control | Catalog mode | Large tool catalog (+ categories) | n/a |
-| Owns corpus graph | Bridges graphify | First-class property graph | Yes |
-| Install | npm `@gatemcp/cli` | Rust binary / multi-channel | pip / uv |
 
 ---
 
