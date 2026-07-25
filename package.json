@@ -20,7 +20,12 @@
     "!dist/scripts/fidelity-test.*",
     "README.md",
     "LICENSE",
-    "ARCHITECTURE.md"
+    "ARCHITECTURE.md",
+    "assets/gatemcp-banner.png",
+    "assets/gatemcp-logo.png",
+    "assets/gatemcp-compress.gif",
+    "assets/gatemcp-catalog.gif",
+    "assets/gatemcp-benchmark.gif"
   ],
   "scripts": {
     "build": "tsc",
