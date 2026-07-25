@@ -193,8 +193,10 @@ try {
   closeAllCacheDbs();
   delete process.env.GATE_CACHE_DB;
 
-  // SQLite initialization failures must remain observable, non-fatal, and
-  // identity-correct through the in-memory fallback.
+  // SQLite initialization failures require GATE_ALLOW_MEMORY_CACHE=1 and must
+  // remain observable + identity-correct through the in-memory fallback.
+  const prevAllowMemory = process.env.GATE_ALLOW_MEMORY_CACHE;
+  process.env.GATE_ALLOW_MEMORY_CACHE = "1";
   const fallbackRoot = path.join(fixtureRoot, "cache-fallback");
   fs.mkdirSync(fallbackRoot, { recursive: true });
   const blockedParent = path.join(fixtureRoot, "blocked-cache-parent");
@@ -219,6 +221,8 @@ try {
   );
   closeCacheDb(fallbackRoot);
   delete process.env.GATE_CACHE_DB;
+  if (prevAllowMemory === undefined) delete process.env.GATE_ALLOW_MEMORY_CACHE;
+  else process.env.GATE_ALLOW_MEMORY_CACHE = prevAllowMemory;
 
   // Legacy SQLite rows stay available to older Gate versions while v3 uses a
   // side-by-side identity-safe table.

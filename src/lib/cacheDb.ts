@@ -460,6 +460,34 @@ function openSqlite(
   }
 }
 
+function memoryCacheAllowed(): boolean {
+  return process.env.GATE_ALLOW_MEMORY_CACHE === "1";
+}
+
+function useOrThrowMemoryFallback(
+  root: string,
+  dbPath: string,
+  reason: string
+): MemState {
+  if (!memoryCacheAllowed()) {
+    const msg =
+      `${reason}. Set GATE_ALLOW_MEMORY_CACHE=1 only for emergency/testing ` +
+      `(in-memory cache is non-durable).`;
+    logger.error(`cacheDb: refusing memory fallback — ${msg}`);
+    throw new Error(msg);
+  }
+  const fallback: MemState = {
+    kind: "memory",
+    root,
+    path: dbPath,
+    fallbackReason: reason,
+    map: new Map(),
+  };
+  states.set(root, fallback);
+  logger.warn(`cacheDb: ${fallback.fallbackReason}; using in-memory cache`);
+  return fallback;
+}
+
 function ensureState(projectRoot?: string): CacheState {
   const root = canonicalDirectory(projectRoot);
   const existing = states.get(root);
@@ -470,16 +498,11 @@ function ensureState(projectRoot?: string): CacheState {
     dbPath = resolveDbPath(root);
   } catch (err) {
     dbPath = path.join(root, ".gate-mcp", "cache.db");
-    const fallback: MemState = {
-      kind: "memory",
+    return useOrThrowMemoryFallback(
       root,
-      path: dbPath,
-      fallbackReason: `invalid cache path: ${errorMessage(err)}`,
-      map: new Map(),
-    };
-    states.set(root, fallback);
-    logger.warn(`cacheDb: ${fallback.fallbackReason}; using memory`);
-    return fallback;
+      dbPath,
+      `invalid cache path: ${errorMessage(err)}`
+    );
   }
 
   const opened = openSqlite(root, dbPath);
@@ -487,16 +510,11 @@ function ensureState(projectRoot?: string): CacheState {
     states.set(root, opened.state);
     return opened.state;
   }
-  const fallback: MemState = {
-    kind: "memory",
+  return useOrThrowMemoryFallback(
     root,
-    path: dbPath,
-    fallbackReason: opened.reason ?? "unknown SQLite initialization failure",
-    map: new Map(),
-  };
-  states.set(root, fallback);
-  logger.warn(`cacheDb: ${fallback.fallbackReason}; using in-memory cache`);
-  return fallback;
+    dbPath,
+    opened.reason ?? "unknown SQLite initialization failure"
+  );
 }
 
 function rowFromInput(input: CacheEntryInput): CacheEntryRow {

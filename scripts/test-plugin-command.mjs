@@ -16,9 +16,13 @@ const marketplacePath = path.join(repositoryRoot, ".agents", "plugins", "marketp
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 const mcp = JSON.parse(fs.readFileSync(mcpPath, "utf8"));
 const marketplace = JSON.parse(fs.readFileSync(marketplacePath, "utf8"));
+const pkg = JSON.parse(
+  fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf8"),
+);
 const server = mcp.mcpServers?.gatemcp;
 const packageOverride = process.env.GATE_PLUGIN_PACKAGE_SPEC;
 const expectedVersion = process.env.GATE_PLUGIN_EXPECTED_VERSION;
+const pluginPin = `--package=@gatemcp/cli@${pkg.version}`;
 const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gatemcp-plugin-"));
 const installedPluginRoot = path.join(isolatedRoot, "gatemcp");
 fs.cpSync(pluginRoot, installedPluginRoot, { recursive: true });
@@ -37,7 +41,10 @@ assert.ok(
     ?.find((arg) => arg.startsWith("--allow-scripts="))
     ?.includes("better-sqlite3"),
 );
-assert.ok(server?.args?.includes("--package=@gatemcp/cli@0.5.5"));
+assert.ok(
+  server?.args?.includes(pluginPin),
+  `plugin MCP pin missing ${pluginPin}`,
+);
 assert.deepEqual(server?.args?.slice(-2), ["--", "gatemcp"]);
 assert.ok(!JSON.stringify(server).includes(repositoryRoot));
 
@@ -56,6 +63,7 @@ const transport = new StdioClientTransport({
   env: {
     ...process.env,
     GATE_PROJECT_ROOT: repositoryRoot,
+    GATE_TOOL_MODE: "catalog",
     npm_config_cache: path.join(isolatedRoot, "npm-cache"),
   },
 });
@@ -103,8 +111,13 @@ try {
     "gate_compress_file",
     "gate_session_stats",
     "gate_help",
+    "gate_invoke",
   ];
   for (const name of requiredTools) assert.ok(toolNames.includes(name), `${name} missing`);
+  assert.ok(
+    !toolNames.includes("gate_memory"),
+    "catalog plugin surface must hide gate_memory",
+  );
 
   const init = await invoke("gate_init", { projectRoot: repositoryRoot });
   assert.equal(init.projectRoot, repositoryRoot);

@@ -47,6 +47,8 @@ const child = spawn(process.execPath, [path.join(repositoryRoot, "dist/main.js")
     ...process.env,
     GATE_PROJECT_ROOT: fixtureRoot,
     GATE_CACHE_DB: cachePath,
+    // Acceptance locks the default catalog surface.
+    GATE_TOOL_MODE: "catalog",
   },
   stdio: ["pipe", "pipe", "pipe"],
 });
@@ -150,12 +152,16 @@ try {
     "gate_compress_file",
     "gate_session_stats",
     "gate_help",
+    "gate_invoke",
   ];
   for (const name of requiredTools) {
     assert.ok(toolNames.includes(name), `${name} is not discoverable`);
     const tool = listed.tools.find((candidate) => candidate.name === name);
     assert.equal(tool.inputSchema?.type, "object", `${name} has no object schema`);
   }
+  assert.ok(!toolNames.includes("gate_memory"), "catalog mode must hide gate_memory");
+  assert.ok(toolNames.includes("gate_invoke"), "catalog mode must expose gate_invoke");
+  assert.ok(toolNames.length <= 8, `catalog tools/list too large: ${toolNames.length}`);
 
   const initialStats = toolPayload(await callTool("gate_session_stats"), "initial stats");
   assert.equal(initialStats.files_considered, 0);
@@ -167,11 +173,24 @@ try {
     "gate_init",
   );
   assert.equal(init.projectRoot, fixtureRoot);
+  assert.equal(init.cache?.persistent, true, "acceptance must use SQLite cache");
+  assert.equal(init.cache?.kind, "sqlite");
 
   const help = toolPayload(await callTool("gate_help"), "gate_help");
   for (const name of requiredTools) {
     assert.ok(help.documentation.includes(name), `help omits ${name}`);
   }
+
+  // Catalog long-tail path: list-only is insufficient — actually dispatch.
+  const invokedMemory = toolPayload(
+    await callTool("gate_invoke", {
+      tool: "gate_memory",
+      args: { action: "list", key: "*" },
+    }),
+    "gate_invoke→gate_memory",
+  );
+  assert.equal(invokedMemory.tool, "gate_memory");
+  assert.ok(invokedMemory.result, "invoke memory missing result");
 
   const graph = toolPayload(
     await callTool("gate_graph_query", {
@@ -232,6 +251,28 @@ try {
   );
   assert.ok(Number.isFinite(stats.elapsed_ms) && stats.elapsed_ms >= 0);
   assert.ok(Number.isFinite(stats.session_elapsed_ms) && stats.session_elapsed_ms >= 0);
+
+  const invokedCompress = toolPayload(
+    await callTool("gate_invoke", {
+      tool: "gate_compress_file",
+      args: { filePath: symbolPath, depth: "signature" },
+    }),
+    "gate_invoke→gate_compress_file",
+  );
+  assert.equal(invokedCompress.tool, "gate_compress_file");
+  assert.ok(
+    invokedCompress.result?.content || invokedCompress.result?.type,
+    "invoke compress missing payload",
+  );
+
+  const badRebuild = await callTool("gate_invoke", {
+    tool: "gate_graph_query",
+    args: { query: "x", rebuild: "false" },
+  });
+  assert.ok(
+    badRebuild.error || badRebuild.result?.isError === true,
+    'gate_invoke must reject rebuild:"false"',
+  );
 
   const unknown = await callTool("gate_unknown_acceptance_tool");
   assert.ok(

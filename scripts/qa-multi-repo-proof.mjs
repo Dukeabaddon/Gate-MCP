@@ -39,6 +39,8 @@ const child = spawn(process.execPath, [distMain], {
     ...process.env,
     GATE_PROJECT_ROOT: parent,
     GATE_CACHE_DB: cacheDb,
+    // Schema/path probes need long-tail tools listed.
+    GATE_TOOL_MODE: "full",
   },
   stdio: ["pipe", "pipe", "pipe"],
 });

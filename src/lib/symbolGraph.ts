@@ -47,7 +47,9 @@ export type SymbolQueryType =
   | "dependents"
   | "file_symbols"
   | "search"
-  | "stats";
+  | "stats"
+  | "symbol_map"
+  | "export_html";
 
 export type GraphifyQueryType = "graphify_hubs" | "graphify_search" | "graphify_map";
 
@@ -619,6 +621,13 @@ export function queryGraph(
       nodesTraversed = graph.nodes.size;
       break;
     }
+
+    case "symbol_map":
+    case "export_html":
+      result =
+        `queryType=${queryType} is handled by gate_graph_query / gatemcp graph-html — rebuild and call handleGraphQuery.`;
+      nodesTraversed = 0;
+      break;
 
     case "file_symbols": {
       // Find all symbols in a specific file

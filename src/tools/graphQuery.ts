@@ -2,8 +2,9 @@
  * gate_graph_query — Symbol graph (tree-sitter) + graphify-out bridge.
  */
 
+import fs from "node:fs";
 import path from "node:path";
-import { queryGraph, invalidateGraph } from "../lib/symbolGraph.js";
+import { buildGraph, queryGraph, invalidateGraph } from "../lib/symbolGraph.js";
 import type {
   GraphQueryType,
   GraphQueryResponse,
@@ -24,6 +25,10 @@ import {
   graphifyWorkspaceRoot,
 } from "../lib/projectRoot.js";
 import { countTextTokens, calculateSavings, formatSavingsNote } from "../lib/tokenCounter.js";
+import {
+  buildBudgetedSymbolMap,
+  writeSymbolGraphHtml,
+} from "../lib/symbolGraphViz.js";
 import logger from "../lib/logger.js";
 
 export interface GraphQueryInput {
@@ -31,6 +36,8 @@ export interface GraphQueryInput {
   projectRoot?: string;
   queryType?: GraphQueryType;
   rebuild?: boolean;
+  /** Token budget for queryType=symbol_map (default 1200). */
+  tokenBudget?: number;
 }
 
 export interface GraphQueryResult {
@@ -70,6 +77,7 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
     projectRoot,
     queryType = "search",
     rebuild = false,
+    tokenBudget,
   } = args;
 
   const resolvedRoot = resolveCodeRoot(projectRoot);
@@ -99,6 +107,58 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
   logger.info(
     `Graph query: "${query}" (type=${queryType}, root=${resolvedRoot}, graphify=${graphifyReport ?? "none"})`
   );
+
+  if (queryType === "symbol_map" || queryType === "export_html") {
+    const graph = buildGraph(resolvedRoot);
+    if (queryType === "export_html") {
+      const outPath = path.join(resolvedRoot, ".gate-mcp", "symbol-graph.html");
+      const written = writeSymbolGraphHtml(graph, outPath, {
+        title: `Gate symbol graph — ${path.basename(resolvedRoot)}`,
+        projectRoot: resolvedRoot,
+      });
+      const result = `Wrote ${written.path} (${written.nodes} nodes, ${written.edges} edges). Open in a browser. This is Gate's symbol graph, not graphify HTML.`;
+      const metrics = calculateSavings(0, countTextTokens(result), "symbol_estimate");
+      return {
+        query,
+        queryType,
+        result,
+        nodesTraversed: written.nodes,
+        originalTokens: metrics.originalTokens,
+        optimizedTokens: metrics.optimizedTokens,
+        savingsPercent: metrics.savingsPercent,
+        expanded: metrics.expanded,
+        baseline: metrics.baseline,
+        billingScope: metrics.billingScope,
+        indexedRoot: resolvedRoot,
+        graphifyReport,
+        source: "symbol",
+        note: "HTML export of Gate symbol graph (tree-sitter). Use graphify's own viz for community maps.",
+      };
+    }
+
+    const map = buildBudgetedSymbolMap(graph, { tokenBudget, query });
+    const metrics = calculateSavings(
+      graph.fileCount * 800,
+      map.tokens,
+      "symbol_estimate"
+    );
+    return {
+      query,
+      queryType,
+      result: map.text,
+      nodesTraversed: map.nodesIncluded,
+      originalTokens: metrics.originalTokens,
+      optimizedTokens: metrics.optimizedTokens,
+      savingsPercent: metrics.savingsPercent,
+      expanded: metrics.expanded,
+      baseline: metrics.baseline,
+      billingScope: metrics.billingScope,
+      indexedRoot: resolvedRoot,
+      graphifyReport,
+      source: "symbol",
+      note: `Budgeted symbol map (${map.nodesIncluded} nodes, ${map.edgesIncluded} edges, budget=${map.tokenBudget}). Complementary to graphify_map.`,
+    };
+  }
 
   if (GRAPHIFY_TYPES.has(queryType)) {
     const mode = queryType as "graphify_hubs" | "graphify_search" | "graphify_map";

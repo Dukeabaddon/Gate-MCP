@@ -70,8 +70,8 @@ class definitions, imports, and type declarations — discarding implementation.
 - Auto-caches results (repeated reads are nearly free via gate_dedup_context)`,
 
   gate_graph_query: `# gate_graph_query
-Two layers (use both):
-1. **Symbol graph** (tree-sitter) — imports, functions, classes in code files
+Two layers (use both — they are not duplicates):
+1. **Symbol graph** (tree-sitter, in-process) — imports, functions, classes
 2. **Graphify bridge** — reads graphify-out/GRAPH_REPORT.md (communities, god nodes)
 
 Nested graphify (e.g. crypto/.../smc/graphify-out/) is auto-discovered by walking up from projectRoot/cwd.
@@ -79,24 +79,28 @@ Nested graphify (e.g. crypto/.../smc/graphify-out/) is auto-discovered by walkin
 ## Parameters
 - query (required): Symbol name, file name, hub name, or community term
 - queryType (optional):
-  - Symbol: 'search' | 'depends_on' | 'dependents' | 'file_symbols' | 'stats'
+  - Symbol: 'search' | 'depends_on' | 'dependents' | 'file_symbols' | 'stats' | 'symbol_map' | 'export_html'
   - Graphify: 'graphify_hubs' | 'graphify_search' | 'graphify_map'
   - 'search' with 0 symbol hits → auto appends graphify_search if GRAPH_REPORT.md exists
+- tokenBudget (optional): For symbol_map only (default 1200)
 - projectRoot (optional): Code index root (default: cwd or GATE_PROJECT_ROOT)
 - rebuild (optional): Force symbol graph rebuild
 
 ## When to use
 - Repo structure / communities → graphify_map or graphify_search
-- God nodes / architecture hubs → graphify_hubs
+- Budgeted code map → symbol_map (Gate-owned; Aider-style ranking)
+- Browser viz of Gate symbols → export_html (writes .gate-mcp/symbol-graph.html) or CLI \`gatemcp graph-html\`
 - Code symbols / imports → search, depends_on, dependents
 - BEFORE reading files — graph first, then gate_compress_file for bodies`,
 
   gate_memory: `# gate_memory
-Cross-session key-value persistence (v0.5.2).
+Cross-session key-value persistence.
 
 ## Storage
-- Primary: SQLite table \`memory_entries\` in \`.gate-mcp/cache.db\` (same file as dedup cache, WAL-safe for concurrent IDEs).
-- Fallback: \`.gate-mcp/memory.json\` when better-sqlite3 is unavailable.
+- Primary: SQLite table \`memory_entries\` in \`.gate-mcp/cache.db\` (same file as dedup cache, WAL-safe).
+- \`better-sqlite3\` is a **required** dependency. Process start fails if the module cannot load (unless GATE_ALLOW_MEMORY_CACHE=1).
+- SQLite open/ABI failures also refuse in-memory cache unless GATE_ALLOW_MEMORY_CACHE=1 (then gate_init.fallbackReason explains why).
+- Emergency JSON path for gate_memory values: \`.gate-mcp/memory.json\` when SQLite memory table cannot open (same escape hatch for durable dedup cache).
 - One-time migration: existing memory.json → SQLite, then renamed to memory.json.migrated.
 
 ## Parameters
@@ -109,6 +113,19 @@ Cross-session key-value persistence (v0.5.2).
 - Persist decisions or findings across sessions
 - Store user preferences or project conventions
 - LRU caps: 2,000 keys / ~10 MB total value size`,
+
+  gate_invoke: `# gate_invoke
+Catalog-mode dispatcher. Call any Gate tool that is not listed in tools/list.
+
+## Parameters
+- tool (required): Gate tool name (e.g. gate_memory, gate_clean_response)
+- args (optional): Object of arguments for that tool
+
+## When to use
+- Default GATE_TOOL_MODE=catalog keeps tools/list small
+- Use gate_invoke for long-tail tools; hot-path tools stay directly listed
+- Set GATE_TOOL_MODE=full to list every tool (debug / legacy)
+- See ARCHITECTURE.md`,
 
   gate_dedup_context: `# gate_dedup_context
 Session-level SHA-256 content deduplication cache.
@@ -300,16 +317,20 @@ and elapsed time actually handled by that request.
   recommended_stack: `# recommended_stack — Token-saving workflow
 
 ## Layer order (do this before full Read)
-1. **gate_graph_query** queryType=graphify_map (or graphify_search) — repo communities + god nodes
-2. **gate_graph_query** queryType=search — symbol/file hits; auto-fallback to graphify when 0 symbol hits
-3. **gate_compress_file** depth=signature (code) or depth=structure (YAML/MD/config)
-4. **gate_dedup_context** — automatic on repeat reads; check action=stats or **gate_session_stats**
-5. **gate_clean_response** — shrink large JSON tool outputs (TOON)
-6. **Caveman** — Cursor user rules / .cursor/rules (output compression, not in gate binary)
+1. **gate_init** — confirm SQLite + toolMode + graphify path
+2. **gate_graph_query** queryType=graphify_map (or symbol_map) — navigate first
+3. **gate_graph_query** queryType=search — symbol/file hits; auto-fallback to graphify when 0 symbol hits
+4. **gate_compress_file** depth=signature (code) or depth=structure (YAML/MD/config)
+5. **gate_session_stats** / dedup — measured tool-payload accounting
+6. **gate_clean_response** or **gate_invoke**→proxy — shrink large JSON tool outputs (TOON)
+
+## Schema budget
+- Default GATE_TOOL_MODE=catalog — small tools/list + gate_invoke for long-tail
+- GATE_TOOL_MODE=full — list every tool (debug)
+- Architecture: ARCHITECTURE.md
 
 ## projectRoot
 - Set projectRoot to the folder that contains graphify-out/ (may be a subfolder, not repo root)
-- AlgoTrading SMC example: crypto/strategies/active/smc
 - Also on: gate_compress_file, gate_dedup_context, gate_session_stats, gate_init, gate_graph_query
 - Use the **same** projectRoot on compress + dedup stats + session_stats or totals look empty
 - projectRoot may only narrow GATE_PROJECT_ROOT — widen the env for multi-repo parents
@@ -320,10 +341,12 @@ and elapsed time actually handled by that request.
 - graphify_map savings are vs full GRAPH_REPORT.md (baseline), not Cursor billing
 - Ignore savings as Cursor usage — billingScope is always tool_payload_only
 - Do not omit projectRoot on session_stats after multi-repo compress (zeros look “broken”)
+- Do not confuse Gate symbol HTML with graphify community HTML
 
 ## Quick commands
 - gate_help tool='gate_graph_query'
 - gate_session_stats — measured current-process work plus cache activity
+- gatemcp graph-html — export Gate symbol graph HTML
 - gate_help tool='directory' — all tools`,
 };
 
@@ -336,25 +359,27 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
   // Directory mode — list all tools with one-line descriptions
   if (!tool || tool === "all" || tool === "directory") {
     const directory = [
-      "# gatemcp Tool Directory (v0.5.6)",
+      "# gatemcp Tool Directory (v0.5.7)",
       "",
       "| Tool | Purpose |",
       "|---|---|",
       "| gate_optimize_image | Compress images via OCR/downscale with per-result metrics |",
       "| gate_compress_file | AST/structure compression (signature/structure/summary/full) |",
-      "| gate_graph_query | Symbol graph + graphify map (graphify_* queryTypes) |",
-      "| gate_memory | Cross-session key-value persistence |",
+      "| gate_graph_query | Symbol graph + graphify map (+ symbol_map / export_html) |",
+      "| gate_memory | Cross-session key-value persistence (SQLite required) |",
       "| gate_dedup_context | SHA-256 session dedup cache (auto-integrated, SQLite-backed) |",
-      "| gate_init | Project health: graphify, cache path, MCP slug hint |",
+      "| gate_init | Project health: toolMode, graphify, cache path |",
       "| gate_session_stats | Measured bytes/tokens/work plus dedup cache activity |",
       "| gate_clean_response | TOON JSON compressor with per-result metrics |",
       "| gate_proxy_tools | Opt-in downstream catalog; requires GATE_ENABLE_PROXY=1 |",
       "| gate_proxy_call | Forward a downstream MCP tool call through gatemcp's compressor |",
       "| gate_validate_compression | LLM-in-the-loop 0-100 quality score for a file's compressed view |",
+      "| gate_invoke | Catalog mode: dispatch any Gate tool by name |",
       "| gate_help | Full docs; tool='recommended_stack' for navigation playbook |",
       "",
+      "Default GATE_TOOL_MODE=catalog lists core tools + gate_invoke.",
       "Use gate_help with tool='<name>' for full documentation.",
-      "Start with gate_help tool='recommended_stack' when onboarding a repo.",
+      "Architecture: ARCHITECTURE.md",
     ].join("\n");
 
     const tokens = countTextTokens(directory);
@@ -364,7 +389,7 @@ export async function handleHelp(args: HelpInput): Promise<HelpResult> {
       tool: "directory",
       documentation: directory,
       tokens,
-      note: `Tool directory: 10 tools. Use tool='<name>' for full docs.`,
+      note: `Tool directory. Catalog mode keeps tools/list small; see ARCHITECTURE.md.`,
     };
   }
 

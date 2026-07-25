@@ -37,6 +37,8 @@ function spawnServer(cwd) {
       GATE_PROJECT_ROOT: parent,
       GATE_CACHE_DB: cacheDb,
       DISABLE_CONSOLE_OUTPUT: "true",
+      // Direct tool calls for path-guard adversarial cases.
+      GATE_TOOL_MODE: "full",
     },
     stdio: ["pipe", "pipe", "pipe"],
   });

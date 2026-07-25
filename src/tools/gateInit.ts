@@ -15,6 +15,7 @@ import {
   getScopedStats,
   resolveCachePartitionRoot,
 } from "../lib/cacheScope.js";
+import { resolveToolMode } from "../lib/toolMode.js";
 import { GATEMCP_VERSION } from "../version.js";
 import logger from "../lib/logger.js";
 
@@ -22,6 +23,7 @@ export interface GateInitResult {
   version: string;
   projectRoot: string;
   mcpSlugHint: string;
+  toolMode: "catalog" | "full";
   graphifyCli: boolean;
   graphify: {
     found: boolean;
@@ -59,6 +61,7 @@ export async function handleGateInit(args: {
   const stats = getScopedStats(projectRoot);
   const backend = cacheBackendInfo(partition);
   const graphifyCli = isGraphifyCliAvailable();
+  const toolMode = resolveToolMode();
 
   const recommendedProjectRoots: string[] = [projectRoot];
   if (workspaceRoot && workspaceRoot !== projectRoot) {
@@ -70,9 +73,14 @@ export async function handleGateInit(args: {
     "Use the enabled gatemcp / @gatemcp/cli server from your mcp.json.";
 
   let note =
-    `gatemcp v${GATEMCP_VERSION} ready. ` +
+    `gatemcp v${GATEMCP_VERSION} ready (toolMode=${toolMode}). ` +
     `Start: gate_help tool='recommended_stack'. ` +
     `Stats: gate_session_stats.`;
+
+  if (toolMode === "catalog") {
+    note +=
+      " Catalog mode: core tools listed; use gate_invoke for the long tail (or GATE_TOOL_MODE=full).";
+  }
 
   if (!reportPath) {
     note += " No graphify-out found — run `graphify update .` in your code folder for map queries.";
@@ -88,17 +96,18 @@ export async function handleGateInit(args: {
       (backend.fallbackReason
         ? ` Reason: ${backend.fallbackReason}.`
         : " Reason unknown — check better-sqlite3 install / GATE_CACHE_DB path.") +
-      ` GATE_CACHE_DB is attempted; persistence fails only when SQLite cannot open.`;
+      ` better-sqlite3 is a required dependency; persistence fails only when SQLite cannot open.`;
   }
 
   logger.info(
-    `gate_init: root=${projectRoot} graphify=${reportPath ?? "none"} cache=${backend.kind}`
+    `gate_init: root=${projectRoot} toolMode=${toolMode} graphify=${reportPath ?? "none"} cache=${backend.kind}`
   );
 
   return {
     version: GATEMCP_VERSION,
     projectRoot,
     mcpSlugHint,
+    toolMode,
     graphifyCli,
     graphify: {
       found: Boolean(reportPath),

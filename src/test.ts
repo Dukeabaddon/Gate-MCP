@@ -1280,7 +1280,7 @@ async function runTests(): Promise<void> {
       !config.args
         .find((arg) => arg.startsWith("--allow-scripts="))
         ?.includes("better-sqlite3") ||
-      !config.args.includes("--package=@gatemcp/cli@0.5.6") ||
+      !config.args.includes("--package=@gatemcp/cli@0.5.7") ||
       config.args.slice(-2).join(" ") !== "-- gatemcp"
     ) {
       throw new Error("plugin server command is not an explicit pinned npm exec");
@@ -1537,12 +1537,15 @@ async function runTests(): Promise<void> {
   {
     const prevRoot = process.env.GATE_PROJECT_ROOT;
     const prevDb = process.env.GATE_CACHE_DB;
+    const prevAllow = process.env.GATE_ALLOW_MEMORY_CACHE;
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gate-qa-fallback-"));
     const badDb = path.join(tmp, "not-a-file-db");
     try {
       fs.mkdirSync(badDb);
       process.env.GATE_PROJECT_ROOT = tmp;
       process.env.GATE_CACHE_DB = badDb;
+      // Escape hatch required for intentional memory fallback.
+      process.env.GATE_ALLOW_MEMORY_CACHE = "1";
       closeCacheDb();
       const init = await handleGateInit({ projectRoot: tmp });
       if (init.cache.persistent || init.cache.kind !== "memory") {
@@ -1561,6 +1564,19 @@ async function runTests(): Promise<void> {
         `  ${PASS} fallbackReason=${init.cache.fallbackReason.slice(0, 72)}…`
       );
       passed++;
+
+      // Fail-closed without escape hatch.
+      delete process.env.GATE_ALLOW_MEMORY_CACHE;
+      closeCacheDb();
+      let refused = false;
+      try {
+        await handleGateInit({ projectRoot: tmp });
+      } catch (err) {
+        refused = String(err).includes("GATE_ALLOW_MEMORY_CACHE");
+      }
+      if (!refused) throw new Error("expected fail-closed without escape hatch");
+      console.error(`  ${PASS} SQLite open failure refuses memory without escape hatch`);
+      passed++;
     } catch (err) {
       console.error(`  ${FAIL} Error: ${err}`);
       failed++;
@@ -1570,12 +1586,138 @@ async function runTests(): Promise<void> {
       else process.env.GATE_PROJECT_ROOT = prevRoot;
       if (prevDb === undefined) delete process.env.GATE_CACHE_DB;
       else process.env.GATE_CACHE_DB = prevDb;
+      if (prevAllow === undefined) delete process.env.GATE_ALLOW_MEMORY_CACHE;
+      else process.env.GATE_ALLOW_MEMORY_CACHE = prevAllow;
       try {
         fs.rmSync(tmp, { recursive: true, force: true });
       } catch {
         // ignore
       }
     }
+  }
+
+  // ── Test 45: toolMode catalog + gate_invoke ──
+  console.error(`\n${INFO} Test 45: toolMode catalog helpers + gate_invoke`);
+  try {
+    const { resolveToolMode, shouldRegisterTool, CATALOG_CORE_TOOLS } =
+      await import("./lib/toolMode.js");
+    const { handleInvoke } = await import("./tools/invoke.js");
+    if (resolveToolMode({ GATE_TOOL_MODE: "catalog" } as NodeJS.ProcessEnv) !== "catalog") {
+      throw new Error("catalog default broken");
+    }
+    if (resolveToolMode({ GATE_TOOL_MODE: "full" } as NodeJS.ProcessEnv) !== "full") {
+      throw new Error("full mode broken");
+    }
+    if (!shouldRegisterTool("gate_invoke", "catalog")) {
+      throw new Error("catalog must list gate_invoke");
+    }
+    if (shouldRegisterTool("gate_invoke", "full")) {
+      throw new Error("full mode must not list gate_invoke");
+    }
+    if (shouldRegisterTool("gate_memory", "catalog")) {
+      throw new Error("catalog must hide gate_memory");
+    }
+    if (!CATALOG_CORE_TOOLS.includes("gate_compress_file")) {
+      throw new Error("core set missing compress");
+    }
+    const invoked = await handleInvoke({
+      tool: "gate_help",
+      args: { tool: "directory" },
+    });
+    if (!String((invoked.result as { documentation?: string }).documentation ?? "").includes("gate_invoke")) {
+      throw new Error("invoke→help missing gate_invoke");
+    }
+    let rejectedCoerce = false;
+    try {
+      await handleInvoke({
+        tool: "gate_graph_query",
+        args: { query: "x", rebuild: "false" },
+      });
+    } catch (err) {
+      rejectedCoerce = String(err).includes("Invalid args");
+    }
+    if (!rejectedCoerce) {
+      throw new Error('gate_invoke must reject rebuild:"false" (boolean coercion)');
+    }
+    const mem = await handleInvoke({
+      tool: "gate_memory",
+      args: { action: "list", key: "*" },
+    });
+    if (!mem.result || typeof mem.result !== "object") {
+      throw new Error("invoke→gate_memory list failed");
+    }
+    console.error(`  ${PASS} catalog/full gating + gate_invoke Zod parity`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} ${err}`);
+    failed++;
+  }
+
+  // ── Test 46: symbol_map + export_html ──
+  console.error(`\n${INFO} Test 46: symbol_map + export_html`);
+  try {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gate-symbol-viz-"));
+    const prevRoot = process.env.GATE_PROJECT_ROOT;
+    process.env.GATE_PROJECT_ROOT = tmp;
+    fs.writeFileSync(
+      path.join(tmp, "a.js"),
+      "export function alphaHelper() { return 1; }\n"
+    );
+    fs.writeFileSync(
+      path.join(tmp, "b.js"),
+      "import { alphaHelper } from './a.js';\nexport function beta() { return alphaHelper(); }\n"
+    );
+    const map = await handleGraphQuery({
+      query: "alpha",
+      projectRoot: tmp,
+      queryType: "symbol_map",
+      tokenBudget: 800,
+      rebuild: true,
+    });
+    if (!map.result.includes("Gate symbol map")) {
+      throw new Error("symbol_map missing header");
+    }
+    if (map.nodesTraversed < 1) throw new Error("symbol_map empty");
+    const html = await handleGraphQuery({
+      query: "",
+      projectRoot: tmp,
+      queryType: "export_html",
+      rebuild: false,
+    });
+    const htmlPath = path.join(tmp, ".gate-mcp", "symbol-graph.html");
+    if (!fs.existsSync(htmlPath)) throw new Error("html not written");
+    const body = fs.readFileSync(htmlPath, "utf8");
+    if (!body.includes("Gate symbol graph") || !body.includes("<svg")) {
+      throw new Error("html content incomplete");
+    }
+    if (!html.result.includes(htmlPath) && !html.result.includes("symbol-graph.html")) {
+      throw new Error("export_html result path missing");
+    }
+    console.error(`  ${PASS} symbol_map + HTML export`);
+    passed++;
+    if (prevRoot === undefined) delete process.env.GATE_PROJECT_ROOT;
+    else process.env.GATE_PROJECT_ROOT = prevRoot;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  } catch (err) {
+    console.error(`  ${FAIL} ${err}`);
+    failed++;
+  }
+
+  // ── Test 47: gate_init reports toolMode ──
+  console.error(`\n${INFO} Test 47: gate_init toolMode`);
+  try {
+    const init = await handleGateInit({});
+    if (init.toolMode !== "catalog" && init.toolMode !== "full") {
+      throw new Error(`unexpected toolMode ${init.toolMode}`);
+    }
+    if (init.version !== "0.5.7") {
+      throw new Error(`expected version 0.5.7 got ${init.version}`);
+    }
+    console.error(`  ${PASS} toolMode=${init.toolMode} version=${init.version}`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} ${err}`);
+    failed++;
   }
 
   // ── Summary ──

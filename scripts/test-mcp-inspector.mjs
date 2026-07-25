@@ -37,6 +37,8 @@ const child = spawn("npx", args, {
     GATE_PROJECT_ROOT: tmp,
     GATE_CACHE_DB: cacheDb,
     DISABLE_CONSOLE_OUTPUT: "true",
+    // Default product surface is catalog mode.
+    GATE_TOOL_MODE: "catalog",
   },
   stdio: ["ignore", "pipe", "pipe"],
 });
@@ -87,13 +89,18 @@ assert.ok(Array.isArray(tools), "tools/list missing tools array");
 const names = new Set(tools.map((t) => t.name));
 for (const required of [
   "gate_compress_file",
-  "gate_dedup_context",
   "gate_session_stats",
   "gate_init",
   "gate_graph_query",
+  "gate_help",
+  "gate_invoke",
 ]) {
   assert.ok(names.has(required), `missing tool ${required}`);
 }
+assert.ok(
+  !names.has("gate_dedup_context"),
+  "catalog mode must not list gate_dedup_context (use gate_invoke)"
+);
 
 const compress = tools.find((t) => t.name === "gate_compress_file");
 assert.ok(

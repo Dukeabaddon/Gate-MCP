@@ -10,7 +10,6 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
 import logger from "./lib/logger.js";
 import { handleOptimizeImage } from "./tools/optimizeImage.js";
 import { handleCompressFile } from "./tools/compressFile.js";
@@ -23,41 +22,78 @@ import { handleProxyTools, handleProxyCall } from "./tools/proxyTools.js";
 import { handleValidateCompression } from "./tools/validateCompression.js";
 import { handleSessionStats } from "./tools/sessionStats.js";
 import { handleGateInit } from "./tools/gateInit.js";
+import { handleInvoke } from "./tools/invoke.js";
 import { GATEMCP_VERSION } from "./version.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
 import { closeCacheDb } from "./lib/cacheDb.js";
 import { closeAllMemoryDbs } from "./lib/memoryDb.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
+import { resolveToolMode, shouldRegisterTool } from "./lib/toolMode.js";
+import { assertSqliteModuleOrExit } from "./lib/sqliteRequired.js";
+import {
+  cleanResponseSchema,
+  compressFileSchema,
+  dedupContextSchema,
+  gateInitSchema,
+  graphQuerySchema,
+  helpSchema,
+  invokeSchema,
+  memorySchema,
+  optimizeImageSchema,
+  proxyCallSchema,
+  proxyToolsSchema,
+  sessionStatsSchema,
+  validateCompressionSchema,
+} from "./lib/toolSchemas.js";
+import { buildGraph, invalidateGraph } from "./lib/symbolGraph.js";
+import { writeSymbolGraphHtml } from "./lib/symbolGraphViz.js";
+import { resolveCodeRoot } from "./lib/projectRoot.js";
 import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { formatDoctorReport, runDoctor } from "./doctor.js";
 
 // ─── Server initialization ─────────────────────────────────────────────────
+
+const toolMode = resolveToolMode();
 
 const server = new McpServer({
   name: "gatemcp",
   version: GATEMCP_VERSION,
 });
 
+type AnyToolConfig = {
+  title?: string;
+  description?: string;
+  inputSchema?: unknown;
+  [key: string]: unknown;
+};
+
+function registerGateTool(
+  name: string,
+  config: AnyToolConfig,
+  handler: (...args: any[]) => any
+): void {
+  if (!shouldRegisterTool(name, toolMode)) {
+    logger.info(`toolMode=${toolMode}: not listing ${name}`);
+    return;
+  }
+  // SDK overloads make Parameters<> resolve to never — cast at the boundary.
+  (server.registerTool as (n: string, c: unknown, h: unknown) => void)(
+    name,
+    config,
+    handler
+  );
+}
+
 // ─── Tool 1: gate_optimize_image ────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_optimize_image",
   {
     title: "Gate Optimize Image",
     description:
       "Compress images via OCR text extraction or downscaling with measured results. See gate_help (recommended_stack).",
-    inputSchema: z.object({
-      imagePath: z
-        .string()
-        .describe("Absolute or relative path to the image file"),
-      intent: z
-        .enum(["text", "visual", "auto"])
-        .optional()
-        .default("auto")
-        .describe(
-          "Processing intent: 'text' extracts OCR text, 'visual' downscales, 'auto' decides based on OCR confidence"
-        ),
-    }),
+    inputSchema: optimizeImageSchema,
   },
   async (args) => {
     try {
@@ -81,30 +117,13 @@ server.registerTool(
 
 // ─── Tool 2: gate_compress_file ─────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_compress_file",
   {
     title: "Gate Compress File",
     description:
       "AST/structure file compression. Code: signature. YAML/MD: auto structure. See gate_help recommended_stack.",
-    inputSchema: z.object({
-      filePath: z
-        .string()
-        .describe("Absolute or relative path to the code file"),
-      depth: z
-        .enum(["signature", "summary", "structure", "full"])
-        .optional()
-        .default("signature")
-        .describe(
-          "signature (AST, default), structure (YAML/MD keys), summary (code only), full (raw)"
-        ),
-      projectRoot: z
-        .string()
-        .optional()
-        .describe(
-          "Optional project root (narrows GATE_PROJECT_ROOT; cannot widen). Use for multi-repo workspaces."
-        ),
-    }),
+    inputSchema: compressFileSchema,
   },
   async (args) => {
     try {
@@ -129,44 +148,13 @@ server.registerTool(
 
 // ─── Tool 3: gate_graph_query ───────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_graph_query",
   {
     title: "Gate Graph Query",
     description:
       "Symbol graph + graphify map. graphify_map/search/hubs for communities. search auto-fallback. See gate_help recommended_stack.",
-    inputSchema: z.object({
-      query: z
-        .string()
-        .describe("Symbol name, file name, or search term to query"),
-      projectRoot: z
-        .string()
-        .optional()
-        .describe("Project root directory (defaults to cwd)"),
-      queryType: z
-        .enum([
-          "depends_on",
-          "dependents",
-          "file_symbols",
-          "search",
-          "stats",
-          "graphify_hubs",
-          "graphify_search",
-          "graphify_map",
-        ])
-        .optional()
-        .default("search")
-        .describe(
-          "Symbol: search | depends_on | dependents | file_symbols | stats. " +
-          "Graphify map (nested graphify-out/): graphify_hubs | graphify_search | graphify_map. " +
-          "search auto-fallback to graphify when 0 symbol hits."
-        ),
-      rebuild: z
-        .boolean()
-        .optional()
-        .default(false)
-        .describe("Force rebuild the graph (invalidates cache)"),
-    }),
+    inputSchema: graphQuerySchema,
   },
   async (args) => {
     try {
@@ -175,6 +163,7 @@ server.registerTool(
         projectRoot: args.projectRoot,
         queryType: args.queryType,
         rebuild: args.rebuild,
+        tokenBudget: args.tokenBudget,
       });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -192,26 +181,13 @@ server.registerTool(
 
 // ─── Tool 4: gate_memory ─────────────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_memory",
   {
     title: "Gate Memory",
     description:
       "Cross-session KV persistence in SQLite (.gate-mcp/cache.db) or memory.json fallback. Use gate_help for full docs.",
-    inputSchema: z.object({
-      action: z
-        .enum(["read", "write", "delete", "list", "clear"])
-        .describe("Memory operation: read/write/delete a key, list all keys, or clear all"),
-      key: z.string().describe("Memory key identifier (use '*' for list/clear)"),
-      value: z
-        .string()
-        .optional()
-        .describe("Value to store (required for 'write' action)"),
-      projectRoot: z
-        .string()
-        .optional()
-        .describe("Project root directory (defaults to cwd)"),
-    }),
+    inputSchema: memorySchema,
   },
   async (args) => {
     try {
@@ -237,37 +213,12 @@ server.registerTool(
 
 // ─── Tool 5: gate_dedup_context ─────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_dedup_context",
   {
     title: "Gate Dedup Context",
     description: "Session dedup cache. Auto-integrated into gate_compress_file. Use 'stats'/'clear' to manage. Use gate_help for full docs.",
-    inputSchema: z.object({
-      action: z
-        .enum(["check", "store", "stats", "clear"])
-        .describe(
-          "'check' = look up file in cache, 'store' = cache compressed content, " +
-          "'stats' = view cache analytics, 'clear' = reset cache"
-        ),
-      filePath: z
-        .string()
-        .optional()
-        .describe("File path (required for check/store)"),
-      content: z
-        .string()
-        .optional()
-        .describe("Compressed content to cache (required for store)"),
-      originalTokens: z
-        .number()
-        .optional()
-        .describe("Original token count before compression (for store)"),
-      projectRoot: z
-        .string()
-        .optional()
-        .describe(
-          "Optional project root (narrows GATE_PROJECT_ROOT). Use the same value as gate_compress_file."
-        ),
-    }),
+    inputSchema: dedupContextSchema,
   },
   async (args) => {
     try {
@@ -294,28 +245,12 @@ server.registerTool(
 
 // ─── Tool 6: gate_clean_response ────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_clean_response",
   {
     title: "Gate Clean Response",
     description: "TOON JSON compressor with measured per-result savings. Modes: toon/compact/whitelist. Use gate_help for full docs.",
-    inputSchema: z.object({
-      data: z.string().describe("Raw JSON string to compress"),
-      format: z
-        .enum(["toon", "compact", "whitelist"])
-        .optional()
-        .default("toon")
-        .describe("Compression format: 'toon' (tabular, default), 'compact' (minified), 'whitelist' (field filter)"),
-      whitelist: z
-        .array(z.string())
-        .optional()
-        .describe("Fields to keep (whitelist mode only)"),
-      maxArrayItems: z
-        .number()
-        .optional()
-        .default(50)
-        .describe("Max array items before truncation (default 50)"),
-    }),
+    inputSchema: cleanResponseSchema,
   },
   async (args) => {
     try {
@@ -341,7 +276,7 @@ server.registerTool(
 
 // ─── Tool 7: gate_proxy_tools ───────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_proxy_tools",
   {
     title: "Gate Proxy Tools",
@@ -350,35 +285,7 @@ server.registerTool(
       "(GitHub, Postgres, etc.) configured in .gate-mcp/proxy-servers.json. " +
       "Modes: list (default), describe (full schema for one tool), status, refresh. " +
       "Disabled until GATE_ENABLE_PROXY=1. Reports measured catalog savings. Use gate_help for full docs.",
-    inputSchema: z.object({
-      action: z
-        .enum(["list", "describe", "status", "refresh"])
-        .optional()
-        .default("list")
-        .describe(
-          "'list' = compressed catalog (default), 'describe' = full schema for one tool, " +
-            "'status' = currently open downstream connections, 'refresh' = drop cache + re-list"
-        ),
-      server: z
-        .string()
-        .optional()
-        .describe(
-          "Server name from proxy-servers.json. Required for describe; filters list."
-        ),
-      tool: z
-        .string()
-        .optional()
-        .describe("Tool name on the chosen server. Required for describe."),
-      maxPerServer: z
-        .number()
-        .optional()
-        .default(999)
-        .describe("Cap tools listed per server (debug aid)."),
-      projectRoot: z
-        .string()
-        .optional()
-        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
-    }),
+    inputSchema: proxyToolsSchema,
   },
   async (args) => {
     try {
@@ -405,7 +312,7 @@ server.registerTool(
 
 // ─── Tool 8: gate_proxy_call ────────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_proxy_call",
   {
     title: "Gate Proxy Call",
@@ -413,43 +320,7 @@ server.registerTool(
       "Invoke a tool on a downstream MCP server through gatemcp's compressor. " +
       "Response is auto-compressed via TOON unless format='raw'. " +
       "Use gate_proxy_tools first to discover servers/tools. Use gate_help for full docs.",
-    inputSchema: z.object({
-      server: z
-        .string()
-        .describe("Downstream server name (must exist in proxy-servers.json)."),
-      tool: z.string().describe("Tool name on the downstream server."),
-      args: z
-        .record(z.unknown())
-        .optional()
-        .describe("Arguments forwarded verbatim to the downstream tool."),
-      format: z
-        .enum(["toon", "compact", "whitelist", "raw"])
-        .optional()
-        .default("toon")
-        .describe(
-          "Response compression: 'toon' (tabular, default), 'compact' (minified JSON), " +
-            "'whitelist' (keep only listed fields), 'raw' (no compression)."
-        ),
-      whitelist: z
-        .array(z.string())
-        .optional()
-        .describe("Fields to keep (whitelist mode only)."),
-      maxArrayItems: z
-        .number()
-        .optional()
-        .default(50)
-        .describe("Max array items before truncation."),
-      projectRoot: z
-        .string()
-        .optional()
-        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
-      timeoutMs: z
-        .number()
-        .optional()
-        .describe(
-          "Per-call timeout in ms. 0 disables. Defaults to 30000 or GATE_PROXY_TIMEOUT_MS env var."
-        ),
-    }),
+    inputSchema: proxyCallSchema,
   },
   async (args) => {
     try {
@@ -480,7 +351,7 @@ server.registerTool(
 
 // ─── Tool 9: gate_validate_compression ──────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_validate_compression",
   {
     title: "Gate Validate Compression",
@@ -488,38 +359,7 @@ server.registerTool(
       "LLM-in-the-loop validator: prove the compressed view of a file preserves enough signal " +
       "for real LLM work. Returns 0-100 quality score across symbol recall, usage-code, and " +
       "specificity. Default provider 'mock' runs without API keys. Use gate_help for full docs.",
-    inputSchema: z.object({
-      filePath: z.string().describe("Path to the source file to validate."),
-      mode: z
-        .enum(["prompts", "score", "run"])
-        .optional()
-        .default("run")
-        .describe(
-          "'prompts' = generate test prompts only, 'score' = score caller-supplied responses, " +
-            "'run' = call the configured provider end-to-end"
-        ),
-      responses: z
-        .record(z.string())
-        .optional()
-        .describe(
-          "When mode='score', a dict mapping prompt id to the LLM's text response."
-        ),
-      provider: z
-        .enum(["mock", "ollama", "openai"])
-        .optional()
-        .default("mock")
-        .describe(
-          "'mock' (default, no API key), 'ollama' (local http://localhost:11434), 'openai' (needs OPENAI_API_KEY)"
-        ),
-      providerOpts: z
-        .record(z.unknown())
-        .optional()
-        .describe("Provider-specific options (model, baseUrl, apiKey)."),
-      projectRoot: z
-        .string()
-        .optional()
-        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)."),
-    }),
+    inputSchema: validateCompressionSchema,
   },
   async (args) => {
     try {
@@ -547,18 +387,13 @@ server.registerTool(
 
 // ─── Tool 10: gate_init ─────────────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_init",
   {
     title: "Gate Init",
     description:
       "Project health: graphify map, dedup cache path, MCP slug hint. Run once per repo. See gate_help.",
-    inputSchema: z.object({
-      projectRoot: z
-        .string()
-        .optional()
-        .describe("Project root (defaults to cwd / GATE_PROJECT_ROOT)"),
-    }),
+    inputSchema: gateInitSchema,
   },
   async (args) => {
     try {
@@ -579,20 +414,13 @@ server.registerTool(
 
 // ─── Tool 11: gate_session_stats ────────────────────────────────────────────
 
-server.registerTool(
+registerGateTool(
   "gate_session_stats",
   {
     title: "Gate Session Stats",
     description:
       "Measured file/byte/token work plus dedup cache activity. See gate_help gate_session_stats.",
-    inputSchema: z.object({
-      projectRoot: z
-        .string()
-        .optional()
-        .describe(
-          "Optional project root for persistent cache totals (same as gate_compress_file)."
-        ),
-    }),
+    inputSchema: sessionStatsSchema,
   },
   async (args) => {
     try {
@@ -613,20 +441,45 @@ server.registerTool(
   }
 );
 
-// ─── Tool 12: gate_help ─────────────────────────────────────────────────────
+// ─── Tool: gate_invoke (catalog mode long-tail) ─────────────────────────────
 
-server.registerTool(
+registerGateTool(
+  "gate_invoke",
+  {
+    title: "Gate Invoke",
+    description:
+      "Catalog mode: call any Gate tool by name with args. Use for tools not in tools/list. See gate_help.",
+    inputSchema: invokeSchema,
+  },
+  async (args) => {
+    try {
+      const result = await handleInvoke({
+        tool: args.tool,
+        args: args.args as Record<string, unknown> | undefined,
+      });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`gate_invoke failed: ${message}`);
+      return {
+        content: [{ type: "text", text: JSON.stringify({ error: message }) }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Tool: gate_help ────────────────────────────────────────────────────────
+
+registerGateTool(
   "gate_help",
   {
     title: "Gate Help",
     description:
       "Full docs for any Gate-MCP tool. tool='recommended_stack' for navigation playbook; omit for directory.",
-    inputSchema: z.object({
-      tool: z
-        .string()
-        .optional()
-        .describe("Tool name to get docs for, or omit for directory"),
-    }),
+    inputSchema: helpSchema,
   },
   async (args) => {
     try {
@@ -699,11 +552,30 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (process.argv[2] === "graph-html") {
+    const rootArg = process.argv.slice(3).find((arg) => !arg.startsWith("--"));
+    const resolvedRoot = resolveCodeRoot(rootArg);
+    invalidateGraph();
+    const graph = buildGraph(resolvedRoot);
+    const outPath = path.join(resolvedRoot, ".gate-mcp", "symbol-graph.html");
+    const written = writeSymbolGraphHtml(graph, outPath, {
+      title: `Gate symbol graph — ${path.basename(resolvedRoot)}`,
+      projectRoot: resolvedRoot,
+    });
+    process.stdout.write(
+      `${JSON.stringify({ ok: true, ...written, indexedRoot: resolvedRoot }, null, 2)}\n`
+    );
+    return;
+  }
+
   process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
   process.on("SIGTERM", () => void gracefulShutdown("SIGTERM"));
   process.on("beforeExit", () => void gracefulShutdown("beforeExit"));
 
-  logger.info(`Starting gatemcp server v${GATEMCP_VERSION}...`);
+  assertSqliteModuleOrExit();
+  logger.info(
+    `Starting gatemcp server v${GATEMCP_VERSION} (toolMode=${toolMode})...`
+  );
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

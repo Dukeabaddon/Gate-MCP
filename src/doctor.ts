@@ -36,6 +36,18 @@ const EXPECTED_TOOLS = [
   "gate_compress_file",
   "gate_session_stats",
   "gate_help",
+  "gate_invoke",
+];
+
+/** Long-tail tools that must stay hidden in default catalog mode. */
+const CATALOG_HIDDEN_TOOLS = [
+  "gate_memory",
+  "gate_dedup_context",
+  "gate_clean_response",
+  "gate_proxy_tools",
+  "gate_proxy_call",
+  "gate_validate_compression",
+  "gate_optimize_image",
 ];
 
 function message(err: unknown): string {
@@ -136,6 +148,7 @@ export async function runDoctor(options: {
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   const requiredPackages = [
     "@modelcontextprotocol/sdk/server/mcp.js",
+    "better-sqlite3",
     "gpt-tokenizer",
     "sharp",
     "tesseract.js",
@@ -234,6 +247,15 @@ export async function runDoctor(options: {
         : "disabled by default; set GATE_ENABLE_PROXY=1 after reviewing config",
   });
 
+  const memoryEscape = process.env.GATE_ALLOW_MEMORY_CACHE === "1";
+  checks.push({
+    name: "memory_cache_policy",
+    status: memoryEscape ? (strict ? "fail" : "warn") : "pass",
+    detail: memoryEscape
+      ? "GATE_ALLOW_MEMORY_CACHE=1 is set (SQLite fail-closed disabled; emergency/testing only)"
+      : "GATE_ALLOW_MEMORY_CACHE unset; SQLite required and memory fallback refused",
+  });
+
   checks.push({
     name: "large_file_limit",
     status: "pass",
@@ -243,14 +265,23 @@ export async function runDoctor(options: {
   let transport: StdioClientTransport | undefined;
   let client: Client | undefined;
   try {
+    const childEnv: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      GATE_PROJECT_ROOT: projectRoot,
+      DISABLE_CONSOLE_OUTPUT: "true",
+      // Doctor always validates the default catalog surface, even if the
+      // parent shell exported GATE_TOOL_MODE=full.
+      GATE_TOOL_MODE: "catalog",
+    };
+    // Do not inherit the memory escape hatch into the doctor MCP child —
+    // otherwise a parent GATE_ALLOW_MEMORY_CACHE=1 makes a non-strict doctor
+    // PASS while the default product policy is bypassed.
+    delete childEnv.GATE_ALLOW_MEMORY_CACHE;
+
     transport = new StdioClientTransport({
       command: process.execPath,
       args: [options.serverEntrypoint],
-      env: {
-        ...(process.env as Record<string, string>),
-        GATE_PROJECT_ROOT: projectRoot,
-        DISABLE_CONSOLE_OUTPUT: "true",
-      },
+      env: childEnv,
     });
     client = new Client(
       { name: "gatemcp-doctor", version: GATEMCP_VERSION },
@@ -268,13 +299,26 @@ export async function runDoctor(options: {
     const missingTools = EXPECTED_TOOLS.filter(
       (tool) => !discoveredTools.includes(tool)
     );
+    const leakedTools = CATALOG_HIDDEN_TOOLS.filter((tool) =>
+      discoveredTools.includes(tool)
+    );
     checks.push({
       name: "tools_list",
-      status: missingTools.length === 0 ? "pass" : "fail",
+      status:
+        missingTools.length === 0 && leakedTools.length === 0 ? "pass" : "fail",
       detail:
-        missingTools.length === 0
-          ? `${discoveredTools.length} tools discovered; required tools visible`
-          : `missing required tools: ${missingTools.join(", ")}`,
+        missingTools.length === 0 && leakedTools.length === 0
+          ? `${discoveredTools.length} catalog tools discovered; long-tail hidden`
+          : [
+              missingTools.length
+                ? `missing required tools: ${missingTools.join(", ")}`
+                : null,
+              leakedTools.length
+                ? `catalog leak (must use gate_invoke): ${leakedTools.join(", ")}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join("; "),
     });
   } catch (err) {
     if (!checks.some((check) => check.name === "mcp_initialize")) {

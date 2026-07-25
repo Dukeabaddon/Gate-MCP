@@ -35,6 +35,10 @@ not intercept ordinary filesystem reads automatically.
 
 ## Installation
 
+`better-sqlite3` is a **required** dependency. Install must allow its native
+build (and the other reviewed native packages below). Without that allowlist,
+install fails or the server refuses to start.
+
 ```bash
 npm install -g --strict-allow-scripts \
   --allow-scripts=better-sqlite3,sharp,tesseract.js,tree-sitter,tree-sitter-bash,tree-sitter-c,tree-sitter-c-sharp,tree-sitter-cli,tree-sitter-cpp,tree-sitter-css,tree-sitter-go,tree-sitter-html,tree-sitter-java,tree-sitter-javascript,tree-sitter-json,tree-sitter-kotlin,tree-sitter-php,tree-sitter-python,tree-sitter-ruby,tree-sitter-rust,tree-sitter-svelte,tree-sitter-swift,tree-sitter-typescript,tree-sitter-vue,tree-sitter-yaml \
@@ -51,8 +55,10 @@ npm exec --yes --strict-allow-scripts \
 
 The npm package is `@gatemcp/cli` but the installed binary is `gatemcp`.
 The explicit allowlist is required by npm 12 for reviewed native dependency
-builds. Without it, Gate starts with safe fallbacks and strict doctor reports
-that SQLite is unavailable. A first native install can take up to one minute.
+builds. A first native install can take up to one minute.
+
+Emergency only: `GATE_ALLOW_MEMORY_CACHE=1` skips the startup module check
+(tests / broken hosts). Prefer fixing the SQLite install.
 
 <details>
 <summary><strong>Install from source (if you prefer)</strong></summary>
@@ -60,7 +66,8 @@ that SQLite is unavailable. A first native install can take up to one minute.
 ```bash
 git clone https://github.com/Dukeabaddon/Gate-MCP.git
 cd Gate-MCP
-npm install
+npm install --strict-allow-scripts \
+  --allow-scripts=better-sqlite3,sharp,tesseract.js,tree-sitter,tree-sitter-bash,tree-sitter-c,tree-sitter-c-sharp,tree-sitter-cli,tree-sitter-cpp,tree-sitter-css,tree-sitter-go,tree-sitter-html,tree-sitter-java,tree-sitter-javascript,tree-sitter-json,tree-sitter-kotlin,tree-sitter-php,tree-sitter-python,tree-sitter-ruby,tree-sitter-rust,tree-sitter-svelte,tree-sitter-swift,tree-sitter-typescript,tree-sitter-vue,tree-sitter-yaml
 npm run build
 npm link   # makes "gatemcp" available system-wide
 ```
@@ -69,8 +76,7 @@ npm link   # makes "gatemcp" available system-wide
 
 ## How It Works
 
-Gate provides four input-side functions. A fifth output-side layer is an
-optional external integration:
+Architecture detail: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ```
                         ┌──────────────────────────┐
@@ -82,29 +88,29 @@ optional external integration:
                      ┌────────────▼────────────────┐
                      │      🚪 gatemcp              │
                      │                              │
-                     │  L0  Lazy schemas            │
+                     │  L0  Catalog tool surface    │
                      │  L1  Graph navigation        │
                      │  L2  File compression        │
                      │  L3  Response cleaning       │
-                     │  L4  External output layer*  │
-                     │                              │
-                     │  * L4 via Caveman (external) │
+                     │  L4  SQLite persistence      │
                      └────────────────────────────────┘
 ```
 
-**Layer 0 — Schema Compression:** Tool descriptions are terse one-liners. Full docs served on demand via `gate_help`.
+**Layer 0 — Schema surface:** Default `GATE_TOOL_MODE=catalog` lists a small
+core (`gate_help`, `gate_init`, compress/graph/stats, `gate_invoke`). Full docs
+via `gate_help`. Set `GATE_TOOL_MODE=full` to list every tool.
 
-**Layer 1 — Code Navigation:** Symbol dependency graph (tree-sitter) plus optional **graphify-out** repo map (`graphify_hubs`, `graphify_search`, `graphify_map`). Symbol `search` auto-falls back to `GRAPH_REPORT.md` when there are zero symbol hits.
+**Layer 1 — Code Navigation:** Gate **symbol graph** (tree-sitter, in-process)
+plus optional **graphify-out** bridge (`graphify_hubs` / `graphify_search` /
+`graphify_map`). Also: `symbol_map` (budgeted) and `export_html` /
+`gatemcp graph-html` for a Gate-owned HTML view (not graphify’s viz).
 
-**Layer 2 — Input Compression:** Files become signatures or structural outlines
-across the language surfaces below. Cache identity includes the canonical path,
-content hash, requested depth, language, compressor version, and schema version.
-SQLite/WAL persistence is used when its native binding opens successfully.
+**Layer 2 — Input Compression:** Files become signatures or structural outlines.
+Cache identity includes path, content hash, depth, language, compressor + schema
+versions. SQLite/WAL is required.
 
-**Layer 3 — Response Cleaning:** Suitable JSON responses are converted to TOON
-(Token-Optimized Object Notation). Use validation for fidelity-sensitive data.
-
-**Layer 4 — Output Compression:** Recommended integration with [Caveman](https://github.com/juliusbrussee/caveman) for AI response compression.
+**Layer 3 — Response Cleaning:** Suitable JSON → TOON tables. Validate when
+fidelity matters.
 
 ## Tools
 
@@ -120,7 +126,8 @@ SQLite/WAL persistence is used when its native binding opens successfully.
 | 8 | `gate_clean_response` | TOON JSON → pipe-delimited tables | Measured per result |
 | 9 | `gate_proxy_tools` / `gate_proxy_call` | Opt-in downstream MCP schemas and responses | Measured per result |
 | 10 | `gate_validate_compression` | LLM-in-the-loop quality score (mock provider for CI) | — |
-| 11 | `gate_help` | Full docs on demand; `tool=recommended_stack` for workflow | 46% schema overhead |
+| 11 | `gate_invoke` | Catalog mode: call any Gate tool by name | Schema budget |
+| 12 | `gate_help` | Full docs on demand; `tool=recommended_stack` for workflow | Lazy docs |
 
 Every compression-oriented tool response includes measured token fields where
 applicable (`originalTokens`, `optimizedTokens`, `savingsPercent`). When
@@ -311,13 +318,17 @@ Verify the installation by asking Codex to call `gate_init`, then confirm
 `gate_graph_query`, `gate_compress_file`, `gate_session_stats`, and `gate_help`
 are visible.
 
-The checked-in plugin pins the currently published npm server,
-`@gatemcp/cli@0.5.5`. Source-only changes in this repository become available
-through the marketplace after that package pin is updated to a published
-release. Until then, test the source build with `node dist/main.js doctor`.
+The checked-in plugin pins `@gatemcp/cli@0.5.7` (must match a published npm
+release before marketplace install works). Source-only changes in this repository
+become available through the marketplace after that package is published. Until
+then, test the source build with `node dist/main.js doctor`.
 The plugin uses explicit `npm exec --package` resolution and a strict native
 build allowlist. This keeps SQLite available on a fresh npm 12 install without
 allowing unrelated dependency scripts.
+
+Default MCP surface is **catalog** mode (`GATE_TOOL_MODE=catalog`): a small
+`tools/list` plus `gate_invoke` for long-tail tools. Set `GATE_TOOL_MODE=full`
+only for debugging.
 
 ### Installation diagnostics
 
@@ -328,10 +339,11 @@ npm run build
 node dist/main.js doctor /absolute/path/to/your/repo --strict
 ```
 
-The published `@gatemcp/cli@0.5.5` does not contain doctor yet. Do not use its
-`npx` command for this check. Doctor checks the executable, Node dependencies,
-repository permissions, a SQLite write/reopen probe, the MCP initialize handshake, and
-`tools/list`. Diagnostics use `stderr`; `--json` writes a machine-readable
+The published `@gatemcp/cli@0.5.7` includes doctor. Prefer
+`npx --package=@gatemcp/cli@0.5.7 gatemcp doctor …` after publish, or
+`node dist/main.js doctor` from this checkout. Doctor checks the executable, Node dependencies,
+repository permissions, a SQLite write/reopen probe, memory-cache policy, the MCP initialize handshake, and
+catalog `tools/list` (including that long-tail tools stay hidden). Diagnostics use `stderr`; `--json` writes a machine-readable
 report to `stdout` because doctor mode is not an MCP transport.
 
 Maintainers can run `npm run test:mcp` after `npm run build` for the Codex/MCP
@@ -547,27 +559,26 @@ Exact test counts are printed by `npm run qa`.
 
 ## Tech Stack
 
-- **Runtime:** Node.js 20–26 + TypeScript ESM
+- **Runtime:** Node.js 20.x and 22–26 (Node 21 unsupported by required better-sqlite3) + TypeScript ESM
 - **MCP SDK:** `@modelcontextprotocol/sdk` ^1.12.1
 - **AST:** tree-sitter where the host ABI loads; deterministic regex/direct-JSON fallback otherwise
-- **Image:** sharp ^0.33 (primary) + jimp 1.6 (fallback) + tesseract.js 5.1
+- **Image:** sharp 0.35.3 (primary) + jimp 1.6 (fallback) + tesseract.js 5.1
 - **Tokens:** gpt-tokenizer ^2.8.1 (real BPE counts, not estimates)
-- **Cache:** better-sqlite3 ^12 (optional, WAL mode) with in-memory Map fallback
+- **Cache:** better-sqlite3 ^12 (**required**, WAL mode); memory Map only with GATE_ALLOW_MEMORY_CACHE=1
 - **Validation:** Zod
 - **Dependencies:** See `package.json` for the maintained runtime and optional parser set. No cloud service or hosted model is required.
 
 ## Comparison
 
-| Feature | gatemcp | Graphify | Caveman | mcp-compressor |
-|---|---|---|---|---|
-| Layers compressed | **4+** | 1 (nav) | 1 (output) | 1 (schema) |
-| Installation | `npm i -g` | `pip install` | System prompt | npm |
-| Cloud required | No | No | No | No |
-| ML models needed | No | No | No | No |
-| Languages | Native plus fallback tiers listed above | 25+ | Any | Any |
-| Codebase size | ~5.5K LOC | 252K LOC | ~100 lines | ~500 LOC |
+| Feature | gatemcp | Graphify | mcp-compressor |
+|---|---|---|---|
+| Primary job | Compress + navigate via MCP | Knowledge graph / communities | Lazy MCP schemas |
+| Installation | `npm i -g` | `pip` / uv | npm wrapper |
+| Cloud required | No | No | No |
+| Owns corpus graph | No (bridges graphify) | Yes | No |
+| Schema surface control | `GATE_TOOL_MODE=catalog` | n/a | Yes |
 
-Gate combines these opt-in input-side functions in one MCP server.
+Gate combines navigation + file/JSON compression in one MCP server.
 
 ## Development
 
@@ -599,12 +610,15 @@ npm start
 
 ## Release status
 
-The v0.5.6 source is a release candidate. `npm run qa` is the required local
-gate. Public npm deployment and the plugin pin are separate release actions;
-do not call v0.5.6 deployed until both complete.
+The v0.5.7 source tree is the current release candidate. `npm run qa` is the
+required local gate. Public npm deployment and the plugin pin must land together;
+do not call v0.5.7 deployed until both complete.
 
 - [x] Published stable package (`@gatemcp/cli@0.5.5`)
-- [ ] Publish `@gatemcp/cli@0.5.6`, then align the plugin pin
+- [ ] Publish `@gatemcp/cli@0.5.7`, then confirm the plugin pin matches
+- [x] Catalog tool mode (`gate_invoke` + lean tools/list; `GATE_TOOL_MODE=full` opt-in)
+- [x] SQLite required (fail-closed unless `GATE_ALLOW_MEMORY_CACHE=1`)
+- [x] Symbol graph HTML export (`export_html` / `gatemcp graph-html`)
 - [x] Proxy mode (`gate_proxy_tools` + `gate_proxy_call`)
 - [x] Tier 2 optional native parsers (PHP, Ruby, Kotlin, Bash, Swift; Vue/Svelte/YAML regex fallback when native grammar unavailable)
 - [x] SQLite-backed dedup cache (`.gate-mcp/cache.db`)
@@ -618,7 +632,28 @@ do not call v0.5.6 deployed until both complete.
 ## Changelog
 
 <details open>
-<summary><strong>v0.5.6 release candidate</strong> — Codex plugin, doctor, measurable session statistics</summary>
+<summary><strong>v0.5.7 release candidate</strong> — catalog mode, required SQLite, symbol HTML</summary>
+
+**Schema budget.** Default `GATE_TOOL_MODE=catalog` lists six core tools plus
+`gate_invoke` for the long tail. Shared Zod schemas validate both direct tool
+calls and `gate_invoke` args (rejects stringly-typed booleans like
+`rebuild:"false"`). Set `GATE_TOOL_MODE=full` for the legacy flat surface.
+
+**SQLite policy.** `better-sqlite3` is a required dependency. Module load and
+cache open failures refuse silent in-memory fallback unless
+`GATE_ALLOW_MEMORY_CACHE=1`. Doctor reports the escape hatch and does not
+inherit it into its MCP child probe.
+
+**Symbol graph viz.** `queryType=export_html` / `gatemcp graph-html` writes
+`.gate-mcp/symbol-graph.html` under the project root with XSS-safe embedding.
+
+**Tests.** MCP acceptance exercises catalog → `gate_invoke` → long-tail tools;
+plugin command test pins catalog and requires `gate_invoke`.
+
+</details>
+
+<details>
+<summary><strong>v0.5.6</strong> — Codex plugin, doctor, measurable session statistics</summary>
 
 **QA follow-up (multi-repo).** `gate_compress_file`, `gate_dedup_context`, and
 `gate_session_stats` accept optional `projectRoot` (parity with
@@ -754,7 +789,7 @@ pre-existing `gate-mcp` package. The CLI binary remains `gatemcp`.
 
 **Persistent dedup cache.** The session dedup cache is now **persistent across IDE restarts** and safe for **concurrent IDEs**. The previous in-memory `Map` is replaced with a SQLite database (WAL journal mode, NORMAL synchronous) at `<projectRoot>/.gate-mcp/cache.db` (override with `GATE_CACHE_DB`).
 
-`better-sqlite3` is an **optional** dependency — if the native binary cannot be loaded on your platform, the cache transparently degrades to the original in-memory Map and the server keeps working.
+`better-sqlite3` is a **required** dependency. Startup fails if the module cannot load (unless `GATE_ALLOW_MEMORY_CACHE=1`). If the module loads but the DB file cannot open, Gate may use an in-memory Map and surfaces `fallbackReason` via `gate_init`.
 
 LRU eviction caps the cache at 10,000 entries or 500 MB of content, whichever is hit first.
 
