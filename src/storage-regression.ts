@@ -276,6 +276,11 @@ try {
     const rcGateDir = path.join(rcRoot, ".gate-mcp");
     const rcDbPath = path.join(rcGateDir, "cache.db");
     fs.mkdirSync(rcGateDir, { recursive: true });
+    // Match cacheDb canonicalDirectory/File so macOS (/var → /private/var) and
+    // Windows short/long paths still count the seeded row after migration.
+    const rcRootKey = fs.realpathSync.native(rcRoot);
+    const rcFilePath = path.join(rcRootKey, "rc.ts");
+    const sqlLiteral = (value: string): string => value.replaceAll("'", "''");
     const rcDb = new Database(rcDbPath);
     rcDb.exec(
       `CREATE TABLE cache_entries (
@@ -298,7 +303,7 @@ try {
        CREATE TABLE cache_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
        INSERT INTO cache_meta VALUES ('schema_version', '3');
        INSERT INTO cache_entries VALUES
-         ('rc-key', '${rcRoot}', '${path.join(rcRoot, "rc.ts")}', 'rc-hash',
+         ('rc-key', '${sqlLiteral(rcRootKey)}', '${sqlLiteral(rcFilePath)}', 'rc-hash',
           'signature', 'typescript', '${COMPRESSOR_CACHE_VERSION}', 3,
           'rc-view', 2, 10, 'file', 0, 1);`
     );
