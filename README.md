@@ -1,18 +1,20 @@
 <p align="center">
-  <h1 align="center">🚪 gatemcp</h1>
-  <p align="center">
-    <strong>Context compression gateway for AI coding assistants</strong><br/>
-    Measure and reduce context without hiding fidelity failures
-  </p>
-  <p align="center">
-    <a href="https://gate-mcp-site.vercel.app/"><strong>Website</strong></a> •
-    <a href="#installation">Install</a> •
-    <a href="#how-it-works">How It Works</a> •
-    <a href="#tools">Tools</a> •
-    <a href="#benchmarks">Benchmarks</a> •
-    <a href="#usage">Usage</a> •
-    <a href="#changelog">Changelog</a>
-  </p>
+  <img src="assets/gatemcp-banner.png" alt="gatemcp" width="100%" />
+</p>
+
+<p align="center">
+  <strong>Context compression gateway for AI coding assistants</strong><br/>
+  Measure and reduce context without hiding fidelity failures
+</p>
+
+<p align="center">
+  <a href="https://gate-mcp-site.vercel.app/"><strong>Website</strong></a> •
+  <a href="#installation">Install</a> •
+  <a href="#how-it-works">How It Works</a> •
+  <a href="#tools">Tools</a> •
+  <a href="#benchmarks">Benchmarks</a> •
+  <a href="#usage">Usage</a> •
+  <a href="#changelog">Changelog</a>
 </p>
 
 ---
