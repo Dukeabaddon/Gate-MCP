@@ -54,6 +54,13 @@ class definitions, imports, and type declarations — discarding implementation.
   - 'summary': One-line per function with brief description
   - 'structure': Keys/headings for YAML, JSON, and Markdown
   - 'full': Returns raw file content (baseline comparison)
+- projectRoot (optional): Narrows GATE_PROJECT_ROOT for path checks + cache
+  isolation. Cannot widen past the env boundary. Use for multi-repo agents.
+
+## Metrics (every result)
+- baseline="file" — originalTokens is the raw file
+- billingScope="tool_payload_only" — not Cursor billed usage
+- expanded=true ⇒ savingsPercent is always 0 (impossible to misread as savings)
 
 ## When to use
 - When you need to understand a file's API without reading implementation
@@ -111,12 +118,13 @@ Automatically integrated into gate_compress_file.
 - action (required): 'check' | 'store' | 'stats' | 'clear'
 - filePath (optional): File path for check/store
 - content (optional): Content to cache for store
+- projectRoot (optional): Same narrowed root as gate_compress_file (multi-repo)
 
 ## When to use
 - Automatically used by gate_compress_file (no manual calls needed)
-- Use 'stats' to see cache activity and raw-vs-cached-view token deltas
-- Use 'clear' to reset cache
-- Explicit unchanged checks return a measured reference-only response
+- Use 'stats' with an optional projectRoot path filter (rows live in one ceiling partition)
+- Use 'clear' with projectRoot to clear only that path scope; omit to wipe the whole partition
+- Explicit store uses depth=explicit; compress auto-cache uses signature/structure
 - gate_compress_file cache hits still return the full compressed view`,
 
   gate_clean_response: `# gate_clean_response
@@ -263,7 +271,12 @@ Onboarding / health check for a project root.
 Measured compression work for the current MCP process plus persistent dedup
 cache totals.
 
-## Current-process measurements
+## Parameters
+- projectRoot (optional): Path filter for persistent cache totals. Narrows
+  GATE_PROJECT_ROOT. When omitted, uses the full trusted ceiling. Dedup rows
+  always live in one partition under that ceiling.
+
+## Current-process measurements (process-wide; ignore projectRoot)
 - files_considered: every successful, schema-valid gate_compress_file result
 - files_compressed: successful non-full results that performed new work
 - input_bytes: UTF-8 file bytes considered, including cache-hit requests
@@ -277,9 +290,11 @@ cache totals.
 Cache hits increment files_considered and cache_hits and add the bytes, tokens,
 and elapsed time actually handled by that request.
 
-## Persistent cache totals
+## Persistent cache totals (filtered by projectRoot)
+- projectRoot / cachePartition
+- billingScope: always tool_payload_only (not Cursor billed tokens)
 - totalEntries / totalHits / totalTokensSaved
-- topEntries: highest-value cached files
+- topEntries: highest-value cached files under the path scope
 - persistentCache: true when SQLite is active`,
 
   recommended_stack: `# recommended_stack — Token-saving workflow
@@ -295,11 +310,16 @@ and elapsed time actually handled by that request.
 ## projectRoot
 - Set projectRoot to the folder that contains graphify-out/ (may be a subfolder, not repo root)
 - AlgoTrading SMC example: crypto/strategies/active/smc
+- Also on: gate_compress_file, gate_dedup_context, gate_session_stats, gate_init, gate_graph_query
+- Use the **same** projectRoot on compress + dedup stats + session_stats or totals look empty
+- projectRoot may only narrow GATE_PROJECT_ROOT — widen the env for multi-repo parents
 
 ## Anti-patterns
 - Do not use depth=summary on YAML/MD (inflates tokens) — use structure
-- Do not trust positive savingsPercent when expanded=true
-- graphify_map savings are vs full GRAPH_REPORT.md, not vs reading every source file
+- Do not trust positive savingsPercent when expanded=true (field is forced to 0)
+- graphify_map savings are vs full GRAPH_REPORT.md (baseline), not Cursor billing
+- Ignore savings as Cursor usage — billingScope is always tool_payload_only
+- Do not omit projectRoot on session_stats after multi-repo compress (zeros look “broken”)
 
 ## Quick commands
 - gate_help tool='gate_graph_query'

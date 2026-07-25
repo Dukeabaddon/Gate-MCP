@@ -6,7 +6,14 @@
  */
 
 import { encode } from "gpt-tokenizer";
-import type { TokenMetrics } from "../types.js";
+import type {
+  MetricsBaseline,
+  MetricsBillingScope,
+  TokenMetrics,
+} from "../types.js";
+
+export const TOOL_PAYLOAD_BILLING_SCOPE: MetricsBillingScope =
+  "tool_payload_only";
 
 /**
  * Estimate image token cost based on pixel dimensions.
@@ -41,7 +48,8 @@ export function countTextTokens(text: string): number {
  */
 export function calculateSavings(
   originalTokens: number,
-  optimizedTokens: number
+  optimizedTokens: number,
+  baseline: MetricsBaseline = "file"
 ): TokenMetrics {
   const expanded = optimizedTokens > originalTokens;
   const rawPercent =
@@ -54,11 +62,16 @@ export function calculateSavings(
     optimizedTokens,
     savingsPercent: expanded ? 0 : Math.max(0, rawPercent),
     expanded,
+    baseline,
+    billingScope: TOOL_PAYLOAD_BILLING_SCOPE,
   };
 }
 
 /** Human-readable note for compress/graph tools. */
 export function formatSavingsNote(metrics: TokenMetrics, detail: string): string {
+  const scope =
+    `baseline=${metrics.baseline ?? "file"}; billingScope=${metrics.billingScope ?? TOOL_PAYLOAD_BILLING_SCOPE} (not Cursor billed tokens)`;
+
   if (metrics.expanded) {
     const extra = metrics.optimizedTokens - metrics.originalTokens;
     const pct =
@@ -67,11 +80,12 @@ export function formatSavingsNote(metrics: TokenMetrics, detail: string): string
         : 0;
     return (
       `Output expanded by ${extra} tokens (+${pct}%). ${detail} ` +
+      `Do not treat as savings. ${scope}. ` +
       `Use depth=full only when raw bytes are required.`
     );
   }
   if (metrics.savingsPercent > 0) {
-    return `${metrics.savingsPercent}% token savings. ${detail}`;
+    return `${metrics.savingsPercent}% token savings vs ${metrics.baseline ?? "file"}. ${detail} ${scope}.`;
   }
-  return detail;
+  return `${detail} ${scope}.`;
 }

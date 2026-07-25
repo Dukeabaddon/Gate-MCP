@@ -15,8 +15,10 @@ import {
   countTextTokens,
   calculateSavings,
   formatSavingsNote,
+  TOOL_PAYLOAD_BILLING_SCOPE,
 } from "../lib/tokenCounter.js";
 import { safeResolveExistingFile } from "../lib/pathGuard.js";
+import { resolvePathRoot } from "../lib/cacheScope.js";
 import logger from "../lib/logger.js";
 import type { CompressionDepth, CompressFileResult } from "../types.js";
 import { checkCache, storeInCache } from "./dedupContext.js";
@@ -39,17 +41,27 @@ function usesStructureOnly(language: string, depth: CompressionDepth): boolean {
   return false;
 }
 
+function withFileMetrics(
+  result: Omit<CompressFileResult, "baseline" | "billingScope">
+): CompressFileResult {
+  return {
+    ...result,
+    baseline: "file",
+    billingScope: TOOL_PAYLOAD_BILLING_SCOPE,
+  };
+}
+
 function cacheHitResult(
   cached: NonNullable<ReturnType<typeof checkCache>>
 ): CompressFileResult {
-  const metrics = calculateSavings(cached.originalTokens, cached.tokens);
+  const metrics = calculateSavings(cached.originalTokens, cached.tokens, "file");
   const savedThisHit = Math.max(0, cached.originalTokens - cached.tokens);
   const savedNote =
     metrics.expanded || savedThisHit === 0
       ? `Cache hit #${cached.hitCount}; cached view is not smaller than raw file.`
       : `Cache hit #${cached.hitCount}; saved ~${savedThisHit} tokens vs re-reading.`;
 
-  return {
+  return withFileMetrics({
     type: cached.depth as "signature" | "summary" | "structure",
     content: cached.content,
     language: cached.language,
@@ -57,22 +69,27 @@ function cacheHitResult(
     optimizedTokens: cached.tokens,
     savingsPercent: metrics.savingsPercent,
     expanded: metrics.expanded,
-    note: `[DEDUP] File unchanged (hash: ${cached.hash}). ${savedNote}`,
-  };
+    note: `[DEDUP] File unchanged (hash: ${cached.hash}). ${savedNote} baseline=file; billingScope=${TOOL_PAYLOAD_BILLING_SCOPE} (not Cursor billed tokens).`,
+  });
 }
 
 export async function handleCompressFile(args: {
   filePath: string;
   depth?: CompressionDepth;
+  projectRoot?: string;
 }): Promise<CompressFileResult> {
   const startedAt = performance.now();
   const { depth = "signature" } = args;
+  const resolvedRoot = resolvePathRoot(args.projectRoot);
 
   const filePath = safeResolveExistingFile(args.filePath, {
     caller: "gate_compress_file",
+    projectRoot: resolvedRoot,
   });
 
-  logger.info(`Compressing file: ${filePath} (depth=${depth})`);
+  logger.info(
+    `Compressing file: ${filePath} (depth=${depth}, projectRoot=${resolvedRoot})`
+  );
 
   const inputBytes = (await fs.promises.stat(filePath)).size;
   const limit = maxFileBytes();
@@ -105,7 +122,12 @@ export async function handleCompressFile(args: {
   };
 
   if (depth === "signature" || depth === "summary" || depth === "structure") {
-    const cached = checkCache(filePath, effectiveDepth, language);
+    const cached = checkCache(
+      filePath,
+      effectiveDepth,
+      language,
+      resolvedRoot
+    );
     if (cached) return finish(cacheHitResult(cached), true);
   }
 
@@ -117,7 +139,15 @@ export async function handleCompressFile(args: {
     case "structure": {
       const result = processStructure(fullContent, language, originalTokens);
       if (result.type !== "full") {
-        storeInCache(filePath, result.content, originalTokens, "file", "structure", language);
+        storeInCache(
+          filePath,
+          result.content,
+          originalTokens,
+          "file",
+          "structure",
+          language,
+          resolvedRoot
+        );
       }
       return finish(result);
     }
@@ -126,7 +156,15 @@ export async function handleCompressFile(args: {
         ? processStructure(fullContent, language, originalTokens)
         : processSignature(fullContent, language, originalTokens);
       if (result.type !== "full") {
-        storeInCache(filePath, result.content, originalTokens, "file", effectiveDepth, language);
+        storeInCache(
+          filePath,
+          result.content,
+          originalTokens,
+          "file",
+          effectiveDepth,
+          language,
+          resolvedRoot
+        );
       }
       return finish(result);
     }
@@ -139,13 +177,29 @@ export async function handleCompressFile(args: {
           "summary not ideal for this format; using structure (keys/headings only)."
         );
         if (result.type !== "full") {
-          storeInCache(filePath, result.content, originalTokens, "file", "structure", language);
+          storeInCache(
+            filePath,
+            result.content,
+            originalTokens,
+            "file",
+            "structure",
+            language,
+            resolvedRoot
+          );
         }
         return finish(result);
       }
       const result = processSummary(fullContent, language, originalTokens);
       if (result.type !== "full") {
-        storeInCache(filePath, result.content, originalTokens, "file", "summary", language);
+        storeInCache(
+          filePath,
+          result.content,
+          originalTokens,
+          "file",
+          "summary",
+          language,
+          resolvedRoot
+        );
       }
       return finish(result);
     }
@@ -154,7 +208,15 @@ export async function handleCompressFile(args: {
     default: {
       const result = processSignature(fullContent, language, originalTokens);
       if (result.type !== "full") {
-        storeInCache(filePath, result.content, originalTokens, "file", "signature", language);
+        storeInCache(
+          filePath,
+          result.content,
+          originalTokens,
+          "file",
+          "signature",
+          language,
+          resolvedRoot
+        );
       }
       return finish(result);
     }
@@ -188,12 +250,12 @@ function processStructure(
   }
 
   let optimizedTokens = countTextTokens(content);
-  let metrics = calculateSavings(originalTokens, optimizedTokens);
+  let metrics = calculateSavings(originalTokens, optimizedTokens, "file");
 
   if (metrics.expanded && lines.length > 40) {
     content = lines.slice(0, 40).join("\n") + "\n// ... structure truncated (expanded guard)";
     optimizedTokens = countTextTokens(content);
-    metrics = calculateSavings(originalTokens, optimizedTokens);
+    metrics = calculateSavings(originalTokens, optimizedTokens, "file");
   }
 
   const counts = [
@@ -207,7 +269,7 @@ function processStructure(
     (extraNote ? `${extraNote} ` : "") +
     `Structure-only view for ${language} (${counts.join(", ") || "outline"}).`;
 
-  return {
+  return withFileMetrics({
     type: "structure",
     content,
     language,
@@ -216,7 +278,7 @@ function processStructure(
     savingsPercent: metrics.savingsPercent,
     expanded: metrics.expanded,
     note: formatSavingsNote(metrics, detail),
-  };
+  });
 }
 
 function processSignature(
@@ -234,7 +296,7 @@ function processSignature(
     );
   }
   const content = formatSignature(sig, language);
-  const metrics = calculateSavings(originalTokens, countTextTokens(content));
+  const metrics = calculateSavings(originalTokens, countTextTokens(content), "file");
 
   const counts = [
     sig.imports.length > 0 ? `${sig.imports.length} imports` : "",
@@ -243,7 +305,7 @@ function processSignature(
     sig.exports.length > 0 ? `${sig.exports.length} exports` : "",
   ].filter(Boolean);
 
-  return {
+  return withFileMetrics({
     type: "signature",
     content,
     language,
@@ -255,7 +317,7 @@ function processSignature(
       metrics,
       `Extracted ${counts.join(", ") || "structural signatures"} from ${language} file.`
     ),
-  };
+  });
 }
 
 function hasStructuralSignal(sig: ReturnType<typeof extractSignatures>): boolean {
@@ -273,7 +335,7 @@ function uncompressedFallback(
   originalTokens: number,
   reason: string
 ): CompressFileResult {
-  return {
+  return withFileMetrics({
     type: "full",
     content: source,
     language,
@@ -281,8 +343,8 @@ function uncompressedFallback(
     optimizedTokens: originalTokens,
     savingsPercent: 0,
     expanded: false,
-    note: `${reason}; full content returned without claiming savings.`,
-  };
+    note: `${reason}; full content returned without claiming savings. baseline=file; billingScope=${TOOL_PAYLOAD_BILLING_SCOPE} (not Cursor billed tokens).`,
+  });
 }
 
 function processSummary(
@@ -311,9 +373,9 @@ function processSummary(
   }
 
   const content = parts.join("\n");
-  const metrics = calculateSavings(originalTokens, countTextTokens(content));
+  const metrics = calculateSavings(originalTokens, countTextTokens(content), "file");
 
-  return {
+  return withFileMetrics({
     type: "summary",
     content,
     language,
@@ -325,7 +387,7 @@ function processSummary(
       metrics,
       `Summary: first 50 lines + signatures + last 20 lines (${lines.length} total lines).`
     ),
-  };
+  });
 }
 
 function processFull(
@@ -333,7 +395,7 @@ function processFull(
   language: string,
   originalTokens: number
 ): CompressFileResult {
-  return {
+  return withFileMetrics({
     type: "full",
     content: source,
     language,
@@ -341,6 +403,6 @@ function processFull(
     optimizedTokens: originalTokens,
     savingsPercent: 0,
     expanded: false,
-    note: "Full file content returned (no compression applied).",
-  };
+    note: `Full file content returned (no compression applied). baseline=file; billingScope=${TOOL_PAYLOAD_BILLING_SCOPE} (not Cursor billed tokens).`,
+  });
 }

@@ -10,7 +10,11 @@ import {
 } from "../lib/projectRoot.js";
 import { graphifyStaleWarning } from "../lib/graphifyFreshness.js";
 import { isGraphifyCliAvailable } from "../lib/graphifyRunner.js";
-import { cacheDbPath, isPersistent, getStats } from "../lib/cacheDb.js";
+import { cacheBackendInfo } from "../lib/cacheDb.js";
+import {
+  getScopedStats,
+  resolveCachePartitionRoot,
+} from "../lib/cacheScope.js";
 import { GATEMCP_VERSION } from "../version.js";
 import logger from "../lib/logger.js";
 
@@ -27,7 +31,11 @@ export interface GateInitResult {
   };
   cache: {
     path: string;
+    kind: "sqlite" | "memory";
     persistent: boolean;
+    /** Present when persistent=false — explains why GATE_CACHE_DB was not used. */
+    fallbackReason?: string;
+    partition: string;
     totalEntries: number;
     totalHits: number;
     totalTokensSaved: number;
@@ -40,6 +48,7 @@ export async function handleGateInit(args: {
   projectRoot?: string;
 }): Promise<GateInitResult> {
   const projectRoot = resolveCodeRoot(args.projectRoot);
+  const partition = resolveCachePartitionRoot();
   const reportPath = findGraphifyReport(projectRoot);
   const workspaceRoot = reportPath ? graphifyWorkspaceRoot(reportPath) : null;
   const staleWarning =
@@ -47,7 +56,8 @@ export async function handleGateInit(args: {
       ? graphifyStaleWarning(workspaceRoot, reportPath)
       : null;
 
-  const stats = getStats(projectRoot);
+  const stats = getScopedStats(projectRoot);
+  const backend = cacheBackendInfo(partition);
   const graphifyCli = isGraphifyCliAvailable();
 
   const recommendedProjectRoots: string[] = [projectRoot];
@@ -72,7 +82,18 @@ export async function handleGateInit(args: {
     note += ` Graphify map: ${path.relative(projectRoot, reportPath) || reportPath}.`;
   }
 
-  logger.info(`gate_init: root=${projectRoot} graphify=${reportPath ?? "none"}`);
+  if (!backend.persistent) {
+    note +=
+      ` Cache is in-memory (not durable).` +
+      (backend.fallbackReason
+        ? ` Reason: ${backend.fallbackReason}.`
+        : " Reason unknown — check better-sqlite3 install / GATE_CACHE_DB path.") +
+      ` GATE_CACHE_DB is attempted; persistence fails only when SQLite cannot open.`;
+  }
+
+  logger.info(
+    `gate_init: root=${projectRoot} graphify=${reportPath ?? "none"} cache=${backend.kind}`
+  );
 
   return {
     version: GATEMCP_VERSION,
@@ -86,8 +107,13 @@ export async function handleGateInit(args: {
       staleWarning,
     },
     cache: {
-      path: cacheDbPath(projectRoot),
-      persistent: isPersistent(projectRoot),
+      path: backend.persistent ? backend.path : "(memory)",
+      kind: backend.kind,
+      persistent: backend.persistent,
+      ...(backend.fallbackReason
+        ? { fallbackReason: backend.fallbackReason }
+        : {}),
+      partition,
       totalEntries: stats.totalEntries,
       totalHits: stats.totalHits,
       totalTokensSaved: stats.totalTokensSaved,

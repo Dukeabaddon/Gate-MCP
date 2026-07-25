@@ -42,6 +42,10 @@ export interface GraphQueryResult {
   optimizedTokens: number;
   savingsPercent: number;
   expanded?: boolean;
+  /** Baseline for originalTokens (GRAPH_REPORT.md or symbol estimate). */
+  baseline?: "file" | "GRAPH_REPORT.md" | "symbol_estimate";
+  /** Explicit: savings are not Cursor billed tokens. */
+  billingScope?: "tool_payload_only";
   indexedRoot: string;
   graphifyReport: string | null;
   source: "symbol" | "graphify" | "symbol+graphify";
@@ -57,7 +61,7 @@ const GRAPHIFY_TYPES = new Set<GraphQueryType>([
 function graphifyMetrics(reportPath: string | undefined, resultText: string) {
   const originalTokens = reportPath ? countGraphifyReportTokens(reportPath) : 0;
   const optimizedTokens = countTextTokens(resultText);
-  return calculateSavings(originalTokens, optimizedTokens);
+  return calculateSavings(originalTokens, optimizedTokens, "GRAPH_REPORT.md");
 }
 
 export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQueryResult> {
@@ -128,6 +132,8 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
       optimizedTokens,
       savingsPercent,
       expanded,
+      baseline: metrics.baseline,
+      billingScope: metrics.billingScope,
       indexedRoot: resolvedRoot,
       graphifyReport: reportPath ?? null,
       source: "graphify",
@@ -159,7 +165,11 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
   }
 
   const optimizedTokens = countTextTokens(result);
-  const metrics = calculateSavings(response.originalTokens, optimizedTokens);
+  const metrics = calculateSavings(
+    response.originalTokens,
+    optimizedTokens,
+    "symbol_estimate"
+  );
   const savingsPercent = metrics.savingsPercent;
 
   const stale = graphifyReport ? graphifyStaleWarning(resolvedRoot, graphifyReport) : null;
@@ -191,6 +201,8 @@ export async function handleGraphQuery(args: GraphQueryInput): Promise<GraphQuer
     optimizedTokens,
     savingsPercent,
     expanded: metrics.expanded,
+    baseline: metrics.baseline,
+    billingScope: metrics.billingScope,
     indexedRoot: response.indexedRoot,
     graphifyReport,
     source,

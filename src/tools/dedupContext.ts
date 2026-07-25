@@ -26,8 +26,6 @@ import {
   putEntry,
   recordHit,
   deleteEntry,
-  clearAll,
-  getStats,
   isPersistent,
   COMPRESSOR_CACHE_VERSION,
   CACHE_SCHEMA_VERSION,
@@ -37,6 +35,12 @@ import {
 import type { CompressionDepth } from "../types.js";
 import { detectLanguage } from "../lib/astParser.js";
 import { safeResolveExistingFile } from "../lib/pathGuard.js";
+import {
+  clearScoped,
+  getScopedStats,
+  resolveCachePartitionRoot,
+  resolvePathRoot,
+} from "../lib/cacheScope.js";
 
 /**
  * Backwards-compatible CacheEntry shape returned to the rest of the codebase.
@@ -157,33 +161,38 @@ export async function handleDedupContext(args: {
   content?: string;
   originalTokens?: number;
   type?: "file" | "image";
+  projectRoot?: string;
 }): Promise<DedupResult> {
   const { action } = args;
+  const pathRoot = resolvePathRoot(args.projectRoot);
+  const cacheRoot = resolveCachePartitionRoot();
 
   // ── Stats: aggregate cache analytics from the backing store ──
   if (action === "stats") {
-    const stats = getStats();
-    const backend = isPersistent() ? "SQLite" : "memory";
+    const stats = getScopedStats(pathRoot);
+    const backend = isPersistent(cacheRoot) ? "SQLite" : "memory";
     return {
       status: "cache_stats",
       totalEntries: stats.totalEntries,
       totalHits: stats.totalHits,
       totalTokensSaved: stats.totalTokensSaved,
       entries: stats.entries,
-      note: `${backend} cache: ${stats.totalEntries} entries, ${stats.totalHits} hits, ${stats.totalTokensSaved} raw-vs-cached-view tokens avoided. Cache hits also avoid recompression work.`,
+      note: `${backend} cache partition=${cacheRoot} scope=${pathRoot}: ${stats.totalEntries} entries, ${stats.totalHits} hits, ${stats.totalTokensSaved} raw-vs-cached-view tokens avoided. Rows live under the GATE_PROJECT_ROOT partition; projectRoot only filters the view.`,
     };
   }
 
-  // ── Clear: wipe all entries ──
+  // ── Clear: wipe scoped entries ──
   if (action === "clear") {
-    const size = clearAll();
-    logger.info(`Session cache cleared (${size} entries removed)`);
+    const size = clearScoped(pathRoot);
+    logger.info(
+      `Session cache cleared (${size} entries removed) scope=${pathRoot} partition=${cacheRoot}`
+    );
     return {
       status: "cache_stats",
       totalEntries: 0,
       totalHits: 0,
       totalTokensSaved: 0,
-      note: `Cache cleared. ${size} entries removed.`,
+      note: `Cache cleared for scope ${pathRoot} (partition ${cacheRoot}). ${size} entries removed.`,
     };
   }
 
@@ -193,16 +202,16 @@ export async function handleDedupContext(args: {
 
     const absPath = safeResolveExistingFile(args.filePath, {
       caller: "gate_dedup_context",
+      projectRoot: pathRoot,
     });
 
     const currentHash = computeFileHash(absPath);
     const language = detectLanguage(absPath);
     const identity = compressionIdentity(currentHash, "explicit", language);
-    const cached = getEntry(absPath, identity);
+    const cached = getEntry(absPath, identity, cacheRoot);
 
     if (cached && cached.hash === currentHash) {
-      // Cache HIT — file unchanged since last read
-      const updated = recordHit(absPath, identity) ?? cached;
+      const updated = recordHit(absPath, identity, cacheRoot) ?? cached;
       const savedThisHit = Math.max(0, updated.originalTokens - updated.tokens);
 
       logger.info(
@@ -225,19 +234,39 @@ export async function handleDedupContext(args: {
       });
     }
 
-    const latest = cached ?? getEntry(absPath);
-    if (latest && latest.hash !== currentHash) {
-      // Cache STALE — file changed since last read
-      logger.info(
-        `Cache STALE: ${absPath} (old hash: ${latest.hash}, new: ${currentHash})`
+    // Surface auto-cache rows from gate_compress_file (signature/structure/…).
+    const autoCached = getEntry(absPath, undefined, cacheRoot);
+    if (autoCached && autoCached.hash === currentHash) {
+      const autoIdentity = compressionIdentity(
+        currentHash,
+        autoCached.depth,
+        autoCached.language
       );
-      deleteEntry(absPath);
+      const updated = recordHit(absPath, autoIdentity, cacheRoot) ?? autoCached;
+      return {
+        status: "cache_hit",
+        filePath: absPath,
+        hash: currentHash,
+        cached: true,
+        hitCount: updated.hitCount,
+        originalTokens: updated.originalTokens,
+        note:
+          `File is in the compress auto-cache (depth=${updated.depth}, hit #${updated.hitCount}). ` +
+          `Call gate_compress_file again for the cached view; explicit store uses depth=explicit.`,
+      };
+    }
+
+    if (autoCached && autoCached.hash !== currentHash) {
+      logger.info(
+        `Cache STALE: ${absPath} (old hash: ${autoCached.hash}, new: ${currentHash})`
+      );
+      deleteEntry(absPath, undefined, cacheRoot);
       return {
         status: "cache_update",
         filePath: absPath,
         hash: currentHash,
         cached: false,
-        note: `File changed since last read (old: ${latest.hash}, new: ${currentHash}). Cache invalidated. Re-read with gate_compress_file.`,
+        note: `File changed since last read (old: ${autoCached.hash}, new: ${currentHash}). Cache invalidated. Re-read with gate_compress_file.`,
       };
     }
 
@@ -246,7 +275,7 @@ export async function handleDedupContext(args: {
       filePath: absPath,
       hash: currentHash,
       cached: false,
-      note: `File not in cache. Read with gate_compress_file, then store with gate_dedup_context(action: "store").`,
+      note: `File not in cache for scope ${pathRoot}. Read with gate_compress_file, then store with gate_dedup_context(action: "store").`,
     };
   }
 
@@ -257,24 +286,28 @@ export async function handleDedupContext(args: {
 
     const absPath = safeResolveExistingFile(args.filePath, {
       caller: "gate_dedup_context",
+      projectRoot: pathRoot,
     });
     const hash = computeFileHash(absPath);
     const tokens = countTextTokens(args.content);
     const originalTokens = args.originalTokens ?? tokens;
     const language = detectLanguage(absPath);
 
-    putEntry({
-      filePath: absPath,
-      hash,
-      content: args.content,
-      tokens,
-      originalTokens,
-      type: args.type ?? "file",
-      depth: "explicit",
-      language,
-      compressorVersion: COMPRESSOR_CACHE_VERSION,
-      schemaVersion: CACHE_SCHEMA_VERSION,
-    });
+    putEntry(
+      {
+        filePath: absPath,
+        hash,
+        content: args.content,
+        tokens,
+        originalTokens,
+        type: args.type ?? "file",
+        depth: "explicit",
+        language,
+        compressorVersion: COMPRESSOR_CACHE_VERSION,
+        schemaVersion: CACHE_SCHEMA_VERSION,
+      },
+      cacheRoot
+    );
 
     logger.info(`Cached: ${absPath} (${tokens} tokens, hash: ${hash})`);
 
@@ -286,7 +319,7 @@ export async function handleDedupContext(args: {
       originalTokens,
       dedupTokens: tokens,
       savingsPercent: 0,
-      note: `Stored in ${isPersistent() ? "persistent" : "in-memory"} cache. Explicit checks return a measured reference-only response; gate_compress_file returns the full cached view.`,
+      note: `Stored in ${isPersistent(cacheRoot) ? "persistent" : "in-memory"} cache partition ${cacheRoot}. Explicit checks return a measured reference-only response; gate_compress_file returns the full cached view.`,
     };
   }
 
@@ -300,26 +333,31 @@ export async function handleDedupContext(args: {
 export function checkCache(
   filePath: string,
   depth: CompressionDepth,
-  language: string
+  language: string,
+  pathRoot?: string
 ): CacheEntry | null {
   try {
+    const cacheRoot = resolveCachePartitionRoot();
     const absPath = safeResolveExistingFile(filePath, {
       caller: "gate_dedup_context:auto-check",
+      projectRoot: pathRoot ?? cacheRoot,
     });
     const currentHash = computeFileHash(absPath);
     const identity = compressionIdentity(currentHash, depth, language);
-    const cached = getEntry(absPath, identity);
+    const cached = getEntry(absPath, identity, cacheRoot);
     if (!cached) {
-      const latest = getEntry(absPath);
-      if (latest && latest.hash !== currentHash) deleteEntry(absPath);
+      const latest = getEntry(absPath, undefined, cacheRoot);
+      if (latest && latest.hash !== currentHash) {
+        deleteEntry(absPath, undefined, cacheRoot);
+      }
       return null;
     }
     if (cached.hash !== currentHash) {
-      deleteEntry(absPath);
+      deleteEntry(absPath, undefined, cacheRoot);
       return null;
     }
 
-    const updated = recordHit(absPath, identity) ?? cached;
+    const updated = recordHit(absPath, identity, cacheRoot) ?? cached;
     const saved = Math.max(0, updated.originalTokens - updated.tokens);
 
     logger.info(
@@ -337,31 +375,37 @@ export function storeInCache(
   originalTokens: number,
   type: "file" | "image" = "file",
   depth: CompressionDepth = "signature",
-  language = detectLanguage(filePath)
+  language = detectLanguage(filePath),
+  pathRoot?: string
 ): void {
   try {
+    const cacheRoot = resolveCachePartitionRoot();
     const absPath = safeResolveExistingFile(filePath, {
       caller: "gate_dedup_context:auto-store",
+      projectRoot: pathRoot ?? cacheRoot,
     });
     const hash = computeFileHash(absPath);
     const tokens = countTextTokens(content);
 
-    putEntry({
-      filePath: absPath,
-      hash,
-      content,
-      tokens,
-      originalTokens,
-      type,
-      depth,
-      language,
-      compressorVersion: COMPRESSOR_CACHE_VERSION,
-      schemaVersion: CACHE_SCHEMA_VERSION,
-    });
+    putEntry(
+      {
+        filePath: absPath,
+        hash,
+        content,
+        tokens,
+        originalTokens,
+        type,
+        depth,
+        language,
+        compressorVersion: COMPRESSOR_CACHE_VERSION,
+        schemaVersion: CACHE_SCHEMA_VERSION,
+      },
+      cacheRoot
+    );
 
     logger.info(`Auto-cached: ${absPath} (${tokens} compressed tokens)`);
   } catch (err) {
     logger.warn(`Failed to cache ${filePath}: ${err}`);
   }
 }
-// Last reviewed: 2026-05-15 — v0.4.0 persistent SQLite migration.
+// Last reviewed: 2026-07-25 — unified cache partition + scoped stats/clear.

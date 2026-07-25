@@ -52,6 +52,8 @@ export type CompressionDepth = "signature" | "summary" | "structure" | "full";
 export interface CompressFileInput {
   filePath: string;
   depth?: CompressionDepth;
+  /** Narrows GATE_PROJECT_ROOT for path checks + cache isolation; cannot widen. */
+  projectRoot?: string;
 }
 
 export type SupportedLanguage =
@@ -88,6 +90,12 @@ export interface FileSignature {
   classes: string[];
 }
 
+/** What originalTokens is measured against (not Cursor billed usage). */
+export type MetricsBaseline = "file" | "GRAPH_REPORT.md" | "symbol_estimate";
+
+/** Savings compare tool payloads only — never host/Cursor billing. */
+export type MetricsBillingScope = "tool_payload_only";
+
 export interface CompressFileResult {
   type: "signature" | "summary" | "structure" | "full";
   content: string;
@@ -97,6 +105,10 @@ export interface CompressFileResult {
   savingsPercent: number;
   /** True when optimized payload is larger than raw file (no fake savings). */
   expanded?: boolean;
+  /** Baseline for originalTokens (raw file contents). */
+  baseline?: MetricsBaseline;
+  /** Explicit: savings are not Cursor billed tokens. */
+  billingScope?: MetricsBillingScope;
   note: string;
 }
 
@@ -175,6 +187,8 @@ export interface TokenMetrics {
   savingsPercent: number;
   /** True when optimized payload exceeds raw input (never report fake savings). */
   expanded: boolean;
+  baseline?: MetricsBaseline;
+  billingScope?: MetricsBillingScope;
 }
 
 // ─── Image Processor Interface ──────────────────────────────────────────────

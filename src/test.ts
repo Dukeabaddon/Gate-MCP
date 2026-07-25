@@ -6,6 +6,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { handleOptimizeImage } from "./tools/optimizeImage.js";
 import { handleCompressFile } from "./tools/compressFile.js";
@@ -20,7 +21,7 @@ import { handleSessionStats } from "./tools/sessionStats.js";
 import { handleGateInit } from "./tools/gateInit.js";
 import { GATEMCP_VERSION } from "./version.js";
 import { handleHelp } from "./tools/help.js";
-import { calculateSavings } from "./lib/tokenCounter.js";
+import { calculateSavings, formatSavingsNote } from "./lib/tokenCounter.js";
 import { countGraphifyReportTokens } from "./lib/graphifyBridge.js";
 import { closeAllProxies } from "./lib/proxyClient.js";
 import { terminateOcr } from "./lib/imageProcessor.js";
@@ -1225,11 +1226,32 @@ async function runTests(): Promise<void> {
     if (!init.mcpSlugHint.includes("user-gatemcp")) {
       throw new Error("missing MCP slug hint");
     }
-    if (!init.cache.path.startsWith(process.cwd())) {
-      throw new Error(`cache path escaped project root: ${init.cache.path}`);
+    if (init.cache.persistent) {
+      if (!init.cache.path.startsWith(process.cwd())) {
+        throw new Error(`cache path escaped project root: ${init.cache.path}`);
+      }
+      if (init.cache.kind !== "sqlite") {
+        throw new Error(`expected sqlite kind, got ${init.cache.kind}`);
+      }
+      if (!init.cache.partition) {
+        throw new Error("missing cache.partition");
+      }
+    } else {
+      if (init.cache.path !== "(memory)") {
+        throw new Error(`expected (memory) path, got ${init.cache.path}`);
+      }
+      if (init.cache.kind !== "memory") {
+        throw new Error(`expected memory kind, got ${init.cache.kind}`);
+      }
+      if (!init.cache.fallbackReason || init.cache.fallbackReason.length < 3) {
+        throw new Error("missing cache.fallbackReason when not persistent");
+      }
+      if (!init.note.includes("in-memory")) {
+        throw new Error("note should explain in-memory cache");
+      }
     }
     console.error(
-      `  ${PASS} graphify=${init.graphify.found} cache=${init.cache.path}`
+      `  ${PASS} graphify=${init.graphify.found} cache=${init.cache.kind}:${init.cache.path}`
     );
     passed++;
   } catch (err) {
@@ -1258,7 +1280,7 @@ async function runTests(): Promise<void> {
       !config.args
         .find((arg) => arg.startsWith("--allow-scripts="))
         ?.includes("better-sqlite3") ||
-      !config.args.includes("--package=@gatemcp/cli@0.5.5") ||
+      !config.args.includes("--package=@gatemcp/cli@0.5.6") ||
       config.args.slice(-2).join(" ") !== "-- gatemcp"
     ) {
       throw new Error("plugin server command is not an explicit pinned npm exec");
@@ -1298,6 +1320,262 @@ async function runTests(): Promise<void> {
   } catch (err) {
     console.error(`  ${FAIL} Error: ${err}`);
     failed++;
+  }
+
+  // ── Test 42: QA multi-repo projectRoot + metrics labels ──
+  console.error(`\n${INFO} Test 42: QA multi-repo compress projectRoot + metrics`);
+  {
+    const prevRoot = process.env.GATE_PROJECT_ROOT;
+    const tmpParent = fs.mkdtempSync(path.join(os.tmpdir(), "gate-qa-multirepo-"));
+    const lockedRoot = path.join(tmpParent, "locked-rag");
+    const webRoot = path.join(tmpParent, "playground-web");
+    try {
+      fs.mkdirSync(lockedRoot);
+      fs.mkdirSync(webRoot);
+      const fixtureDir = path.resolve(process.cwd(), "test-fixtures/multi-repo-web");
+      const targetJs = path.join(webRoot, "app.js");
+      fs.copyFileSync(path.join(fixtureDir, "app.js"), targetJs);
+      fs.copyFileSync(
+        path.join(fixtureDir, "styles.css"),
+        path.join(webRoot, "styles.css")
+      );
+      process.env.GATE_PROJECT_ROOT = tmpParent;
+
+      const first = await handleCompressFile({
+        filePath: targetJs,
+        depth: "signature",
+        projectRoot: webRoot,
+      });
+      if (first.baseline !== "file") {
+        throw new Error(`baseline expected file, got ${first.baseline}`);
+      }
+      if (first.billingScope !== "tool_payload_only") {
+        throw new Error(`billingScope missing/wrong: ${first.billingScope}`);
+      }
+      if (!first.note.includes("not Cursor billed tokens")) {
+        throw new Error("note missing Cursor billing disclaimer");
+      }
+      if (first.type === "full" && first.savingsPercent > 0) {
+        throw new Error("full fallback must not claim savings");
+      }
+
+      const relative = await handleCompressFile({
+        filePath: "app.js",
+        depth: "signature",
+        projectRoot: webRoot,
+      });
+      if (!relative.note.includes("[DEDUP]")) {
+        throw new Error("relative path + projectRoot should hit compress auto-cache");
+      }
+
+      const css = await handleCompressFile({
+        filePath: "styles.css",
+        depth: "structure",
+        projectRoot: webRoot,
+      });
+      if (css.baseline !== "file" || css.billingScope !== "tool_payload_only") {
+        throw new Error("css result missing metric labels");
+      }
+
+      const second = await handleCompressFile({
+        filePath: targetJs,
+        depth: "signature",
+        projectRoot: webRoot,
+      });
+      if (!second.note.includes("[DEDUP]")) {
+        throw new Error("expected dedup cache hit on second compress");
+      }
+
+      // Same absolute file without projectRoot must share the GATE_PROJECT_ROOT partition.
+      const wide = await handleCompressFile({
+        filePath: targetJs,
+        depth: "signature",
+      });
+      if (!wide.note.includes("[DEDUP]")) {
+        throw new Error(
+          "compress without projectRoot must hit same partition as narrowed compress"
+        );
+      }
+
+      const statsScoped = await handleSessionStats({ projectRoot: webRoot });
+      if (statsScoped.totalEntries < 1) {
+        throw new Error(
+          `session_stats with matching projectRoot expected entries>=1, got ${statsScoped.totalEntries}`
+        );
+      }
+      if (statsScoped.billingScope !== "tool_payload_only") {
+        throw new Error("session_stats missing billingScope");
+      }
+      if (statsScoped.cachePartition !== tmpParent) {
+        throw new Error(
+          `cachePartition should be GATE_PROJECT_ROOT (${tmpParent}), got ${statsScoped.cachePartition}`
+        );
+      }
+      const statsWrong = await handleSessionStats({ projectRoot: lockedRoot });
+      if (statsWrong.totalEntries !== 0) {
+        throw new Error(
+          `locked root should not see web cache rows (got ${statsWrong.totalEntries})`
+        );
+      }
+
+      const dedupStats = await handleDedupContext({
+        action: "stats",
+        projectRoot: webRoot,
+      });
+      if ((dedupStats.totalEntries ?? 0) < 1) {
+        throw new Error("dedup stats with projectRoot should see compress cache");
+      }
+      const dedupCheck = await handleDedupContext({
+        action: "check",
+        filePath: "app.js",
+        projectRoot: webRoot,
+      });
+      if (dedupCheck.status !== "cache_hit") {
+        throw new Error(
+          `dedup check should see compress auto-cache, got ${dedupCheck.status}`
+        );
+      }
+      if ((dedupCheck.hitCount ?? 0) < 1) {
+        throw new Error("auto-cache check must recordHit (hitCount>=1)");
+      }
+
+      // Sibling clear must not wipe the other repo's rows.
+      fs.writeFileSync(path.join(lockedRoot, "only-locked.js"), "export const x=1;\n");
+      await handleCompressFile({
+        filePath: path.join(lockedRoot, "only-locked.js"),
+        depth: "signature",
+        projectRoot: lockedRoot,
+      });
+      const cleared = await handleDedupContext({
+        action: "clear",
+        projectRoot: lockedRoot,
+      });
+      if ((cleared.totalEntries ?? 0) !== 0) {
+        throw new Error("clear response should report empty scoped totals");
+      }
+      const webStill = await handleSessionStats({ projectRoot: webRoot });
+      if (webStill.totalEntries < 1) {
+        throw new Error("clearing locked scope must not delete web-repo cache rows");
+      }
+
+      let narrowRejected = false;
+      try {
+        await handleCompressFile({
+          filePath: targetJs,
+          depth: "signature",
+          projectRoot: lockedRoot,
+        });
+      } catch (err) {
+        narrowRejected = String(err).includes("outside project boundary");
+      }
+      if (!narrowRejected) {
+        throw new Error("expected projectRoot narrowing to reject sibling file");
+      }
+
+      let widenRejected = false;
+      try {
+        await handleCompressFile({
+          filePath: targetJs,
+          depth: "signature",
+          projectRoot: path.dirname(tmpParent),
+        });
+      } catch (err) {
+        widenRejected = String(err).includes("outside project boundary");
+      }
+      if (!widenRejected) {
+        throw new Error("expected projectRoot above GATE_PROJECT_ROOT to be rejected");
+      }
+
+      const helpCompress = await handleHelp({ tool: "gate_compress_file" });
+      if (!helpCompress.documentation.includes("projectRoot")) {
+        throw new Error("help for gate_compress_file missing projectRoot");
+      }
+
+      console.error(
+        `  ${PASS} multi-repo compress + relative + stats parity + narrow/widen reject`
+      );
+      passed++;
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    } finally {
+      if (prevRoot === undefined) delete process.env.GATE_PROJECT_ROOT;
+      else process.env.GATE_PROJECT_ROOT = prevRoot;
+      try {
+        fs.rmSync(tmpParent, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+
+  // ── Test 43: expanded savingsPercent stays 0 (QA metrics UX) ──
+  console.error(`\n${INFO} Test 43: expanded metrics cannot fake positive %`);
+  try {
+    const expanded = calculateSavings(10, 50, "file");
+    if (expanded.expanded !== true || expanded.savingsPercent !== 0) {
+      throw new Error(
+        `expected expanded+0%, got expanded=${expanded.expanded} pct=${expanded.savingsPercent}`
+      );
+    }
+    if (expanded.billingScope !== "tool_payload_only") {
+      throw new Error("billingScope missing on TokenMetrics");
+    }
+    const note = formatSavingsNote(expanded, "test detail");
+    if (!note.includes("Do not treat as savings") || !note.includes("not Cursor billed")) {
+      throw new Error(`weak expanded note: ${note}`);
+    }
+    console.error(`  ${PASS} expanded forces 0% + explicit billing disclaimer`);
+    passed++;
+  } catch (err) {
+    console.error(`  ${FAIL} Error: ${err}`);
+    failed++;
+  }
+
+  // ── Test 44: gate_init surfaces SQLite fallbackReason (QA #3) ──
+  console.error(`\n${INFO} Test 44: gate_init fallbackReason when SQLite cannot open`);
+  {
+    const prevRoot = process.env.GATE_PROJECT_ROOT;
+    const prevDb = process.env.GATE_CACHE_DB;
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gate-qa-fallback-"));
+    const badDb = path.join(tmp, "not-a-file-db");
+    try {
+      fs.mkdirSync(badDb);
+      process.env.GATE_PROJECT_ROOT = tmp;
+      process.env.GATE_CACHE_DB = badDb;
+      closeCacheDb();
+      const init = await handleGateInit({ projectRoot: tmp });
+      if (init.cache.persistent || init.cache.kind !== "memory") {
+        throw new Error("expected memory fallback");
+      }
+      if (init.cache.path !== "(memory)") {
+        throw new Error(`expected (memory), got ${init.cache.path}`);
+      }
+      if (!init.cache.fallbackReason?.includes("SQLite open failed")) {
+        throw new Error(`weak fallbackReason: ${init.cache.fallbackReason}`);
+      }
+      if (!init.note.includes("Reason:")) {
+        throw new Error("note missing Reason for memory cache");
+      }
+      console.error(
+        `  ${PASS} fallbackReason=${init.cache.fallbackReason.slice(0, 72)}…`
+      );
+      passed++;
+    } catch (err) {
+      console.error(`  ${FAIL} Error: ${err}`);
+      failed++;
+    } finally {
+      closeCacheDb();
+      if (prevRoot === undefined) delete process.env.GATE_PROJECT_ROOT;
+      else process.env.GATE_PROJECT_ROOT = prevRoot;
+      if (prevDb === undefined) delete process.env.GATE_CACHE_DB;
+      else process.env.GATE_CACHE_DB = prevDb;
+      try {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      } catch {
+        // ignore
+      }
+    }
   }
 
   // ── Summary ──

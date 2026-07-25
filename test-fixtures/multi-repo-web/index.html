@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Navigo Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <nav class="site-nav" aria-label="Main">
+      <a class="site-nav__brand" href="#">Navigo</a>
+      <ul class="site-nav__links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#about">About</a></li>
+        <li><a href="#contact">Contact</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="hero">
+    <p class="hero__eyebrow">Gate-MCP fixture</p>
+    <h1 class="hero__title">Navigo Demo</h1>
+    <p class="hero__lead">A tiny static page for multi-repo compression tests.</p>
+    <button type="button" id="go" class="btn btn--primary">Get started</button>
+    <p id="status" class="hero__status" role="status" aria-live="polite"></p>
+  </main>
+
+  <footer class="site-footer">
+    <small>Multi-repo web fixture — not for production.</small>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

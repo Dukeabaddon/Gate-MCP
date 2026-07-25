@@ -122,16 +122,83 @@ SQLite/WAL persistence is used when its native binding opens successfully.
 | 10 | `gate_validate_compression` | LLM-in-the-loop quality score (mock provider for CI) | — |
 | 11 | `gate_help` | Full docs on demand; `tool=recommended_stack` for workflow | 46% schema overhead |
 
-Every tool response includes `originalTokens`, `optimizedTokens`, and `savingsPercent`. When compression **inflates** output, `expanded: true` and savings are **not** reported as positive (no fake “-56% savings”).
+Every compression-oriented tool response includes measured token fields where
+applicable (`originalTokens`, `optimizedTokens`, `savingsPercent`). When
+compression **inflates** output, `expanded: true` and savings are **not**
+reported as positive (no fake “-56% savings”). `gate_init` /
+`gate_session_stats` / `gate_dedup_context` use different payload shapes.
 
 **Recommended workflow** (monorepos with nested `graphify-out/`):
 
 1. `gate_init` — confirm graphify path and set `GATE_PROJECT_ROOT` if needed  
 2. `gate_graph_query` with `queryType: graphify_map` (map before full `Read`)  
 3. `gate_compress_file` with `depth: signature` (Python/TS) or `structure` (YAML/MD)  
-4. `gate_session_stats` — measured session work plus cache activity
+4. `gate_session_stats` — measured session work plus cache activity (pass the same `projectRoot` in multi-repo setups)
 
 Call `gate_help` with `tool: "recommended_stack"` for the full playbook.
+
+### Multi-repo / one global MCP
+
+One Cursor MCP server can serve many folders under a shared parent. Tool
+argument `projectRoot` **narrows** that boundary; it cannot widen it.
+
+| Setting | Guidance |
+|---|---|
+| `GATE_PROJECT_ROOT` | Set to the trusted parent (e.g. `/home/you/Documents`), not a single child repo |
+| `GATE_CACHE_DB` | Put the SQLite file **inside** that parent (e.g. `$GATE_PROJECT_ROOT/.gate-mcp/cache.db`) |
+| Per-call `projectRoot` | Pass the active repo root on `gate_compress_file`, `gate_graph_query`, `gate_init`, `gate_dedup_context`, and `gate_session_stats` |
+| Relative paths | Resolve against per-call `projectRoot` when supplied; otherwise against **`GATE_PROJECT_ROOT` if set, else the MCP server startup cwd** — not necessarily the IDE’s open folder |
+| Cache partition | Dedup rows always live under the trusted ceiling (one partition). `projectRoot` **filters** stats/clear to paths under that folder |
+
+```js
+// Active work is playground/web while GATE_PROJECT_ROOT is /Documents
+gate_compress_file({
+  filePath: "src/app.js",
+  depth: "signature",
+  projectRoot: "/Documents/playground/web",
+});
+gate_session_stats({ projectRoot: "/Documents/playground/web" });
+```
+
+**`gate_session_stats` scoping:** Response includes `projectRoot` (path filter) and
+`cachePartition` (always the trusted ceiling). `totalEntries` / `totalHits` /
+`totalTokensSaved` / `topEntries` are filtered by `projectRoot`. `files_considered`,
+`files_compressed` (non-`full`, non-cache-hit compressions only), byte/token
+counters, and `cache_hits` are **process-wide** for this MCP instance.
+`estimated_tokens_after` counts the **serialized tool JSON**, not just the
+compressed content field. All of these are `billingScope: "tool_payload_only"` —
+not Cursor billed usage.
+
+Omitting `projectRoot` on `gate_dedup_context` `clear` wipes the **entire**
+partition under the trusted ceiling (all sibling repos). Pass a child
+`projectRoot` to clear only that path scope.
+
+**`gate_optimize_image`** does not accept `projectRoot`; image paths must already
+lie under `GATE_PROJECT_ROOT` (prefer absolute paths).
+
+If `gate_init` reports `cache.persistent: false` and `cache.path: "(memory)"`,
+read `cache.fallbackReason` — `GATE_CACHE_DB` was attempted; SQLite failed to
+open (often a broken `better-sqlite3` native install). Rebuild with approved
+install scripts, then restart the MCP server.
+
+### How to read savings metrics
+
+Compression-oriented tools (`gate_compress_file`, `gate_graph_query`,
+`gate_clean_response`, `gate_optimize_image`, proxy tools, etc.) include measured
+`originalTokens` / `optimizedTokens` / `savingsPercent` where applicable.
+`gate_init`, `gate_session_stats`, and `gate_dedup_context` do **not** always
+expose those three fields.
+
+`savingsPercent` compares **tool payloads** (compressed view vs raw file or
+`GRAPH_REPORT.md`). It is **not** Cursor billed usage.
+
+| Field | Meaning |
+|---|---|
+| `baseline` | `"file"` \| `"GRAPH_REPORT.md"` \| `"symbol_estimate"` |
+| `billingScope` | `"tool_payload_only"` on compress/graph/session_stats |
+| `expanded: true` | Output grew; `savingsPercent` is forced to `0` |
+
+Ignore positive % as “Cursor tokens saved.” Use it only to compare Gate payload sizes.
 
 ## Language Support
 
@@ -160,15 +227,17 @@ All native parsers are **optional dependencies** — install failures degrade gr
 
 ## Security
 
-Path-traversal protection: by default, tool calls are restricted to the current project directory.
+Path-traversal protection: by default, tool calls are restricted to the trusted
+boundary — **`GATE_PROJECT_ROOT` when set, otherwise the MCP server’s startup
+`cwd()`**. Per-call `projectRoot` may only select that root or a subdirectory.
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `GATE_PROJECT_ROOT` | `process.cwd()` | Boundary for path arguments |
+| `GATE_PROJECT_ROOT` | `process.cwd()` | Trusted path ceiling (must be an **existing directory**); tool `projectRoot` may only narrow this |
 | `GATE_ALLOW_ANY_PATH` | `0` | Set to `1` to disable boundary (NOT recommended) |
 | `GATE_MAX_FILES` | `5000` | Max files indexed by symbol graph (hard cap 50000) |
 | `GATE_MAX_FILE_BYTES` | `33554432` | Maximum file size accepted by `gate_compress_file` |
-| `GATE_CACHE_DB` | `<projectRoot>/.gate-mcp/cache.db` | Path to persistent dedup cache DB |
+| `GATE_CACHE_DB` | `<GATE_PROJECT_ROOT>/.gate-mcp/cache.db` | Persistent dedup DB under the trusted ceiling (not per-call `projectRoot`); must stay inside that ceiling |
 | `GATE_GRAPHIFY_REPORT` | _(auto-discover)_ | Absolute path to `GRAPH_REPORT.md` if not under cwd |
 | `GATE_ENABLE_PROXY` | `0` | Set to `1` only after reviewing proxy commands |
 
@@ -300,16 +369,20 @@ IDE's MCP config. Click your IDE below for the exact snippet.
       "command": "gatemcp",
       "args": [],
       "env": {
-        "GATE_PROJECT_ROOT": "/absolute/path/to/your/repo"
+        "GATE_PROJECT_ROOT": "/absolute/path/to/Documents",
+        "GATE_CACHE_DB": "/absolute/path/to/Documents/.gate-mcp/cache.db"
       }
     }
   }
 }
 ```
 
+For a single repo, point both env vars at that repo. For multi-repo agents, use the
+parent folder as above, then pass per-call `projectRoot` to the active child repo.
+
 In Cursor the server may appear as **`user-gatemcp`** (not `gatemcp`) — that is normal.
 
-Restart Cursor. Open the MCP panel (Settings → Features → MCP Servers) to verify the server is connected. Run **`gate_init`** once per workspace.
+Restart Cursor. Open the MCP panel (Settings → Features → MCP Servers) to verify the server is connected. Run **`gate_init`** once per workspace. If `cache.persistent` is false, read `cache.fallbackReason` and rebuild `better-sqlite3`.
 </details>
 
 <details>
@@ -546,6 +619,18 @@ do not call v0.5.6 deployed until both complete.
 
 <details open>
 <summary><strong>v0.5.6 release candidate</strong> — Codex plugin, doctor, measurable session statistics</summary>
+
+**QA follow-up (multi-repo).** `gate_compress_file`, `gate_dedup_context`, and
+`gate_session_stats` accept optional `projectRoot` (parity with
+`gate_graph_query` / `gate_init`). Args may only narrow `GATE_PROJECT_ROOT`,
+never widen it. Dedup rows share one partition under the trusted ceiling;
+`projectRoot` filters stats/clear by path (so omitting vs passing child root
+no longer splits the same file across two caches). Persistent totals in
+`gate_session_stats` honor that filter; process-local counters do not.
+`gate_init` reports `cache.kind`, `cache.partition`, and `cache.fallbackReason`
+when SQLite cannot open. Compress/graph/session results label
+`billingScope="tool_payload_only"`. Proof: `npm test` + `test:mcp-inspector`
+(official MCP Inspector CLI).
 
 **Codex installation.** Adds a repository marketplace, validated Codex plugin,
 and pinned MCP server command. The active session must be restarted after

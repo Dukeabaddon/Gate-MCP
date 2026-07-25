@@ -98,6 +98,12 @@ server.registerTool(
         .describe(
           "signature (AST, default), structure (YAML/MD keys), summary (code only), full (raw)"
         ),
+      projectRoot: z
+        .string()
+        .optional()
+        .describe(
+          "Optional project root (narrows GATE_PROJECT_ROOT; cannot widen). Use for multi-repo workspaces."
+        ),
     }),
   },
   async (args) => {
@@ -105,6 +111,7 @@ server.registerTool(
       const result = await handleCompressFile({
         filePath: args.filePath,
         depth: args.depth,
+        projectRoot: args.projectRoot,
       });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -254,6 +261,12 @@ server.registerTool(
         .number()
         .optional()
         .describe("Original token count before compression (for store)"),
+      projectRoot: z
+        .string()
+        .optional()
+        .describe(
+          "Optional project root (narrows GATE_PROJECT_ROOT). Use the same value as gate_compress_file."
+        ),
     }),
   },
   async (args) => {
@@ -263,6 +276,7 @@ server.registerTool(
         filePath: args.filePath,
         content: args.content,
         originalTokens: args.originalTokens,
+        projectRoot: args.projectRoot,
       });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -571,11 +585,20 @@ server.registerTool(
     title: "Gate Session Stats",
     description:
       "Measured file/byte/token work plus dedup cache activity. See gate_help gate_session_stats.",
-    inputSchema: z.object({}),
+    inputSchema: z.object({
+      projectRoot: z
+        .string()
+        .optional()
+        .describe(
+          "Optional project root for persistent cache totals (same as gate_compress_file)."
+        ),
+    }),
   },
-  async () => {
+  async (args) => {
     try {
-      const result = await handleSessionStats();
+      const result = await handleSessionStats({
+        projectRoot: args.projectRoot,
+      });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       };
