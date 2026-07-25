@@ -615,7 +615,7 @@ required local gate. Public npm deployment and the plugin pin must land together
 do not call v0.5.7 deployed until both complete.
 
 - [x] Published stable package (`@gatemcp/cli@0.5.5`)
-- [ ] Publish `@gatemcp/cli@0.5.7`, then confirm the plugin pin matches
+- [x] Publish `@gatemcp/cli@0.5.7`, then confirm the plugin pin matches
 - [x] Catalog tool mode (`gate_invoke` + lean tools/list; `GATE_TOOL_MODE=full` opt-in)
 - [x] SQLite required (fail-closed unless `GATE_ALLOW_MEMORY_CACHE=1`)
 - [x] Symbol graph HTML export (`export_html` / `gatemcp graph-html`)
