@@ -218,6 +218,11 @@ try {
   );
   assert.equal(statsOk.billingScope, "tool_payload_only");
   assert.ok(statsOk.cachePartition, "missing cachePartition");
+  assert.equal(
+    statsOk.cachePartition,
+    fs.realpathSync.native(parent),
+    "cachePartition must match canonical GATE_PROJECT_ROOT (/var vs /private/var)"
+  );
 
   const statsEmpty = toolBody(
     await send("tools/call", {
