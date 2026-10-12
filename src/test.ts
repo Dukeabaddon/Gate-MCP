@@ -32,6 +32,7 @@ import {
   isMemoryPersistent,
   _resetMemoryDbForTests,
 } from "./lib/memoryDb.js";
+import { canonicalizePath } from "./lib/pathGuard.js";
 
 const DIVIDER = "═".repeat(60);
 const PASS = "✅";
@@ -1091,7 +1092,9 @@ async function runTests(): Promise<void> {
   const algoSmc = "/Users/macbookair/Documents/Visual Studio Code/Python/AlgoTrading/crypto/strategies/active/smc";
   if (fs.existsSync(path.join(algoSmc, "graphify-out/GRAPH_REPORT.md"))) {
     console.error(`\n${INFO} Test 34: AlgoTrading SMC graphify_search OrderManager`);
+    const prevAlgoRoot = process.env.GATE_PROJECT_ROOT;
     try {
+      process.env.GATE_PROJECT_ROOT = algoSmc;
       const result = await handleGraphQuery({
         projectRoot: algoSmc,
         query: "OrderManager",
@@ -1107,6 +1110,9 @@ async function runTests(): Promise<void> {
     } catch (err) {
       console.error(`  ${FAIL} Error: ${err}`);
       failed++;
+    } finally {
+      if (prevAlgoRoot === undefined) delete process.env.GATE_PROJECT_ROOT;
+      else process.env.GATE_PROJECT_ROOT = prevAlgoRoot;
     }
   } else {
     console.error(`\n${INFO} Test 34: skipped (AlgoTrading SMC graph not on this machine)`);
@@ -1280,7 +1286,7 @@ async function runTests(): Promise<void> {
       !config.args
         .find((arg) => arg.startsWith("--allow-scripts="))
         ?.includes("better-sqlite3") ||
-      !config.args.includes("--package=@gatemcp/cli@0.5.7") ||
+      !config.args.includes("--package=@gatemcp/cli@0.5.8") ||
       config.args.slice(-2).join(" ") !== "-- gatemcp"
     ) {
       throw new Error("plugin server command is not an explicit pinned npm exec");
@@ -1406,9 +1412,10 @@ async function runTests(): Promise<void> {
       if (statsScoped.billingScope !== "tool_payload_only") {
         throw new Error("session_stats missing billingScope");
       }
-      if (statsScoped.cachePartition !== tmpParent) {
+      const expectedPartition = canonicalizePath(tmpParent);
+      if (statsScoped.cachePartition !== expectedPartition) {
         throw new Error(
-          `cachePartition should be GATE_PROJECT_ROOT (${tmpParent}), got ${statsScoped.cachePartition}`
+          `cachePartition should be GATE_PROJECT_ROOT (${expectedPartition}), got ${statsScoped.cachePartition}`
         );
       }
       const statsWrong = await handleSessionStats({ projectRoot: lockedRoot });
@@ -1710,8 +1717,8 @@ async function runTests(): Promise<void> {
     if (init.toolMode !== "catalog" && init.toolMode !== "full") {
       throw new Error(`unexpected toolMode ${init.toolMode}`);
     }
-    if (init.version !== "0.5.7") {
-      throw new Error(`expected version 0.5.7 got ${init.version}`);
+    if (init.version !== "0.5.8") {
+      throw new Error(`expected version 0.5.8 got ${init.version}`);
     }
     console.error(`  ${PASS} toolMode=${init.toolMode} version=${init.version}`);
     passed++;

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * Consumer install proof: pack (or fetch) @gatemcp/cli@0.5.7 and exercise it
+ * Consumer install proof: pack (or fetch) @gatemcp/cli@0.5.8 and exercise it
  * against the HTML/CSS/JS fixture as a fresh project — not the Gate source tree.
  *
  * Usage:
  *   node scripts/qa-consumer-html-install.mjs
- *   GATE_CONSUMER_PACKAGE=@gatemcp/cli@0.5.7 node scripts/qa-consumer-html-install.mjs
- *   GATE_CONSUMER_PACKAGE=file:./gatemcp-cli-0.5.7.tgz node ...
+ *   GATE_CONSUMER_PACKAGE=@gatemcp/cli@0.5.8 node scripts/qa-consumer-html-install.mjs
+ *   GATE_CONSUMER_PACKAGE=file:./gatemcp-cli-0.5.8.tgz node ...
  */
 
 import assert from "node:assert/strict";
@@ -29,7 +29,7 @@ fs.cpSync(fixtureSrc, projectRoot, { recursive: true });
 const cacheDb = path.join(projectRoot, ".gate-mcp", "cache.db");
 fs.mkdirSync(path.dirname(cacheDb), { recursive: true });
 
-const expectedVersion = "0.5.7";
+const expectedVersion = "0.5.8";
 let packageSpec = process.env.GATE_CONSUMER_PACKAGE?.trim();
 
 function run(cmd, args, opts = {}) {

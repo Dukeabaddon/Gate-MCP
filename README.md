@@ -134,6 +134,31 @@ Architecture detail: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 `gate_help` with `tool: "recommended_stack"` is the agent-facing playbook.
 
+<a id="what-gate-compresses"></a>
+
+### What Gate compresses — and what it does not
+
+Gate only shrinks **results of Gate tool calls**. It is a tool your agent
+chooses to call, not a filter on the whole conversation.
+
+| Gate reduces | Gate does **not** touch |
+|---|---|
+| `tools/list` schema size (catalog mode) | Your prompts and chat history |
+| File views returned by `gate_compress_file` | The editor's built-in `Read` / `Grep` / terminal output |
+| Graph answers from `gate_graph_query` | Rules, system prompt, attached files |
+| Re-reads of unchanged files (SQLite dedup) | Model output — generated code and replies |
+| JSON passed to `gate_clean_response` | Other MCP servers (unless routed through the opt-in proxy) |
+| Images passed to `gate_optimize_image` | Your provider bill — see `billingScope` below |
+
+What this means in practice:
+
+- If the agent never calls a Gate tool, savings are **zero**. Add a rule
+  telling your agent to use `gate_compress_file` before full reads.
+- An agent footer such as `Savings: n/a` means no Gate compression ran that
+  turn. It does not mean Gate is broken. Run `gate_init` to confirm health.
+- Gate cannot shrink code generation. Smaller input context leaves more room
+  for output, but the output itself is the model's.
+
 ---
 
 <a id="get-started-60-seconds"></a>
@@ -157,10 +182,10 @@ npm exec --yes --strict-allow-scripts \
   --package=@gatemcp/cli -- gatemcp
 ```
 
-Package: `@gatemcp/cli` · binary: `gatemcp` · current: **0.5.7**.
+Package: `@gatemcp/cli` · binary: `gatemcp` · current: **0.5.8**.
 
 Then wire your IDE (Cursor snippet below). Run **`gate_init`** once per workspace.
-Doctor: `npx --package=@gatemcp/cli@0.5.7 gatemcp doctor /abs/path/to/repo --strict`.
+Doctor: `npx --package=@gatemcp/cli@0.5.8 gatemcp doctor /abs/path/to/repo --strict`.
 
 <details>
 <summary><strong>Install from source</strong></summary>
@@ -201,6 +226,54 @@ narrow (never widen).
 
 </details>
 
+<a id="pin-node-for-sqlite"></a>
+
+<details>
+<summary><strong>Pin Node in <code>mcp.json</code></strong> — fixes SQLite <code>NODE_MODULE_VERSION</code> errors</summary>
+
+`better-sqlite3` is a native module. It is compiled for the Node version that
+ran `npm install`. Your IDE may launch MCP servers with a **different** Node
+(nvm, Homebrew, Volta, or a GUI app `PATH` without your shell profile).
+
+Symptoms:
+
+- Server fails to start, or `gate_init` / `gate_session_stats` shows `persistentCache: false`
+- Log line like `was compiled against a different Node.js version using NODE_MODULE_VERSION 127. This version of Node.js requires NODE_MODULE_VERSION 137`
+
+Fix: point the IDE at the **same** Node binary that installed Gate. In the
+terminal where you installed it:
+
+```bash
+which node                                   # e.g. /Users/you/.nvm/versions/node/v22.21.1/bin/node
+echo "$(npm root -g)/@gatemcp/cli/dist/main.js"
+```
+
+Then use both absolute paths:
+
+```json
+{
+  "mcpServers": {
+    "gatemcp": {
+      "command": "/Users/you/.nvm/versions/node/v22.21.1/bin/node",
+      "args": ["/Users/you/.nvm/versions/node/v22.21.1/lib/node_modules/@gatemcp/cli/dist/main.js"],
+      "env": {
+        "GATE_PROJECT_ROOT": "/absolute/path/to/your/repo"
+      }
+    }
+  }
+}
+```
+
+Verify with the same Node:
+`/path/to/node /path/to/dist/main.js doctor /absolute/path/to/your/repo --strict` —
+`cache_access` must say `SQLite write/reopen probe passed`.
+
+If you switch Node versions later, reinstall Gate under the new version (or
+keep the pin). Avoid `GATE_ALLOW_MEMORY_CACHE=1` as a fix — it hides the
+problem and turns off persistent dedup.
+
+</details>
+
 <details>
 <summary><strong>Claude Code / Windsurf / Antigravity / VS Code / Codex</strong></summary>
 
@@ -218,7 +291,7 @@ narrow (never widen).
 codex plugin marketplace add Dukeabaddon/Gate-MCP && codex plugin add gatemcp@dukeabaddon-gate-mcp
 ```
 
-Restart the thread after install. Plugin pins `@gatemcp/cli@0.5.7`.
+Restart the thread after install. Plugin pins `@gatemcp/cli@0.5.8`.
 
 </details>
 
@@ -257,11 +330,45 @@ savings stay `0`.
 | `billingScope` | `"tool_payload_only"` — **not** Cursor billed tokens |
 | `expanded: true` | Output grew; `savingsPercent` forced to `0` |
 
-`gate_session_stats` mixes path-filtered persistent cache totals with
-process-wide counters for the MCP instance. See prior release notes for the
-exact field split.
-
 </details>
+
+<a id="reading-gate-session-stats"></a>
+
+### Reading `gate_session_stats`
+
+The result has two groups of numbers with **different scopes**. Do not add
+them together.
+
+**Persistent cache** — stored in SQLite, survives IDE restarts, filtered by `projectRoot`:
+
+| Field | Meaning |
+|---|---|
+| `persistentCache` | `true` = SQLite. `false` = in-memory fallback; run `gatemcp doctor --strict` (often a [Node pin](#pin-node-for-sqlite) issue) |
+| `cachePartition` | Canonical `GATE_PROJECT_ROOT` the DB belongs to (macOS shows `/private/var` for `/var`) |
+| `projectRoot` | Path filter applied to the totals below |
+| `totalEntries` | Files cached under that path |
+| `totalHits` | Times an unchanged file was served from cache |
+| `totalTokensSaved` | Cumulative raw-file tokens minus cached-view tokens on those hits |
+| `topEntries` | Top 10 files by activity |
+
+**This MCP process** — reset when the server restarts, counts every repo the process served:
+
+| Field | Meaning |
+|---|---|
+| `files_considered` / `files_compressed` | Files Gate read / returned a smaller view for |
+| `input_bytes` / `output_bytes` | Raw file bytes in vs tool-result bytes out |
+| `estimated_tokens_before` / `estimated_tokens_after` | Same, as BPE token estimates |
+| `cache_hits` | Dedup hits in this process |
+| `elapsed_ms` / `session_elapsed_ms` | Gate processing time / server uptime |
+
+Labels on every result:
+
+- `measurement_scope: "serialized_tool_result_excluding_mcp_envelope"` — what was measured.
+- `billingScope: "tool_payload_only"` — **not** your Cursor / provider bill. Your bill also includes prompts, history, rules, other tools, and model output.
+
+Example from one real session: `estimated_tokens_before: 6622`,
+`estimated_tokens_after: 666` → Gate tool results were ~90% smaller than the
+raw files. That is the honest claim; it is not "90% off your bill".
 
 <details>
 <summary><strong>Multi-repo / one global MCP</strong></summary>
@@ -385,7 +492,7 @@ With gatemcp (agent actually calls Gate):
 
 ## By the numbers
 
-- **`@gatemcp/cli@0.5.7`** on npm — binary `gatemcp`
+- **`@gatemcp/cli@0.5.8`** on npm — binary `gatemcp`
 - **Catalog-first** tool surface (schema anti-bloat)
 - **12** tools (6 hot-path in catalog + long tail via `gate_invoke`)
 - **20+** languages via tree-sitter / regex fallback
@@ -454,7 +561,9 @@ Codex: remove the plugin from the Codex UI / plugin list. Source installs: `npm 
 
 | Area | Behavior |
 |------|----------|
-| **Opt-in only** | Zero savings if the agent never calls Gate |
+| **Opt-in only** | Zero savings if the agent never calls Gate — see [what Gate compresses](#what-gate-compresses) |
+| **Code generation** | Model output is never compressed; Gate only shrinks tool results |
+| **Native SQLite** | IDE must run the same Node that installed Gate — see [Pin Node](#pin-node-for-sqlite) |
 | **gate graph vs graphify** | Different graphs; use `graphify_*` for communities |
 | **Graph savings %** | Symbol queries use a modeled baseline; `graphify_map` baselines the report file |
 | **Cursor MCP name** | May appear as `user-gatemcp` |
@@ -491,6 +600,22 @@ Node **20** and **22–26** (Node 21 unsupported by required better-sqlite3).
 ## Changelog
 
 <details open>
+<summary><strong>v0.5.8</strong> — dependency security fixes, end-user docs</summary>
+
+**Security.** `sharp` 0.35.3 → 0.35.5 (libheif / librsvg advisories). Lockfile
+refresh clears transitive advisories in `proxy-addr`, `ip-address`, `fast-uri`,
+`hono`, and `qs`. `npm audit --omit=dev` reports 0.
+
+**Docs.** [What Gate compresses](#what-gate-compresses),
+[reading `gate_session_stats`](#reading-gate-session-stats), and
+[pinning Node for SQLite](#pin-node-for-sqlite).
+
+**QA.** macOS `/var` vs `/private/var` canonical-path fixes in test scripts.
+No tool behavior changes.
+
+</details>
+
+<details>
 <summary><strong>v0.5.7</strong> — catalog mode, required SQLite, symbol HTML</summary>
 
 **Schema budget.** Default `GATE_TOOL_MODE=catalog` lists six core tools plus

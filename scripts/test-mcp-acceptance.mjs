@@ -11,7 +11,9 @@ const repositoryRoot = path.resolve(import.meta.dirname, "..");
 const { countTextTokens } = await import(
   path.join(repositoryRoot, "dist/lib/tokenCounter.js")
 );
-const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "gatemcp-acceptance-"));
+const fixtureRoot = fs.realpathSync.native(
+  fs.mkdtempSync(path.join(os.tmpdir(), "gatemcp-acceptance-")),
+);
 const cachePath = path.join(fixtureRoot, ".gate-mcp", "acceptance-cache.db");
 fs.mkdirSync(path.dirname(cachePath), { recursive: true });
 
