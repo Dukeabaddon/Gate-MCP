@@ -49,3 +49,34 @@ node dist/main.js doctor --strict
 
 - graphify node-count drift warnings
 - EPIPE on MCP stdio after test suite (non-failing noise)
+
+---
+
+# Next — end-user docs (done) + React demo (plan only)
+
+Constraints: Gate stays standalone; graphify is a separate tool, no bundling.
+Ask the user before any graphify integration or caveman-in-code change.
+
+## D1 — README end-user docs [x]
+
+- `What Gate compresses — and what it does not` (tool results only; not prompts, built-in Read, or model output; meaning of `Savings: n/a`).
+- `Reading gate_session_stats` — persistent-cache fields vs process-wide fields, `measurement_scope`, `billingScope`, honest example.
+- `Pin Node in mcp.json` — absolute `node` + `dist/main.js` paths; `NODE_MODULE_VERSION` symptom; verify with `doctor --strict`.
+- Known limitations: code generation, native SQLite rows.
+
+## P1 — React demo script: full read vs compress (PLAN ONLY — do not build until user says)
+
+Goal: reproducible, honest before/after numbers for marketing, from one command.
+
+| Step | Detail |
+|------|--------|
+| Fixture | Pin a public React repo at a fixed commit (e.g. a mid-size Vite + React app), cloned to a temp dir — not vendored |
+| Task | Fixed "work loop": 8–12 files a real agent touches for one feature (component, hook, context, API client, test) |
+| Baseline | Raw file bytes + BPE tokens (same counter as `tokenCounter.ts`) for each file |
+| Gate | Spawn `dist/main.js` over MCP stdio; call `gate_compress_file` `signature` per file, then a second pass to show dedup hits; finish with `gate_session_stats` |
+| Output | `demo/react-demo-result.json` + Markdown table: file, raw tokens, Gate tokens, %, `expanded` flag |
+| Honesty | Label `billingScope: tool_payload_only`; include files where Gate expands or saves ~0; show that edits still need a `full` read |
+
+Files: `scripts/demo-react-compare.mjs` (new), `package.json` script `demo:react`, README "Benchmarks" link.
+Acceptance: deterministic numbers on two runs; no network after clone; runs on Node 20 and 22.
+Risks: picking a repo that flatters Gate — choose before seeing numbers; signature-only views are not enough to edit code, so the demo must say so.
