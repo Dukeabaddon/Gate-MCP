@@ -1,6 +1,6 @@
 {
   "name": "@gatemcp/cli",
-  "version": "0.5.7",
+  "version": "0.5.8",
   "description": "Local context compression and repository navigation for MCP clients, with per-result measurements, multi-language AST views, graphs, TOON, and OCR.",
   "type": "module",
   "main": "dist/main.js",
@@ -85,7 +85,7 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "gpt-tokenizer": "^2.8.1",
     "jimp": "^1.6.0",
-    "sharp": "0.35.3",
+    "sharp": "0.35.5",
     "tesseract.js": "5.1.1",
     "tree-sitter": "0.21.1",
     "tree-sitter-javascript": "0.23.1",
@@ -144,11 +144,11 @@
     "tree-sitter-yaml@0.5.0": true,
     "tree-sitter-cli@0.23.2": true,
     "tree-sitter-c@0.23.2": true,
-    "sharp@0.35.3": true
+    "sharp@0.35.5": true
   },
   "overrides": {
-    "hono": "4.12.30",
-    "qs": "6.15.3",
+    "hono": "4.13.13",
+    "qs": "6.16.0",
     "tree-sitter-c": "0.23.2",
     "tree-sitter-cli": "0.23.2",
     "@hono/node-server": "2.0.11"

@@ -182,10 +182,10 @@ npm exec --yes --strict-allow-scripts \
   --package=@gatemcp/cli -- gatemcp
 ```
 
-Package: `@gatemcp/cli` · binary: `gatemcp` · current: **0.5.7**.
+Package: `@gatemcp/cli` · binary: `gatemcp` · current: **0.5.8**.
 
 Then wire your IDE (Cursor snippet below). Run **`gate_init`** once per workspace.
-Doctor: `npx --package=@gatemcp/cli@0.5.7 gatemcp doctor /abs/path/to/repo --strict`.
+Doctor: `npx --package=@gatemcp/cli@0.5.8 gatemcp doctor /abs/path/to/repo --strict`.
 
 <details>
 <summary><strong>Install from source</strong></summary>
@@ -291,7 +291,7 @@ problem and turns off persistent dedup.
 codex plugin marketplace add Dukeabaddon/Gate-MCP && codex plugin add gatemcp@dukeabaddon-gate-mcp
 ```
 
-Restart the thread after install. Plugin pins `@gatemcp/cli@0.5.7`.
+Restart the thread after install. Plugin pins `@gatemcp/cli@0.5.8`.
 
 </details>
 
@@ -492,7 +492,7 @@ With gatemcp (agent actually calls Gate):
 
 ## By the numbers
 
-- **`@gatemcp/cli@0.5.7`** on npm — binary `gatemcp`
+- **`@gatemcp/cli@0.5.8`** on npm — binary `gatemcp`
 - **Catalog-first** tool surface (schema anti-bloat)
 - **12** tools (6 hot-path in catalog + long tail via `gate_invoke`)
 - **20+** languages via tree-sitter / regex fallback
@@ -600,6 +600,22 @@ Node **20** and **22–26** (Node 21 unsupported by required better-sqlite3).
 ## Changelog
 
 <details open>
+<summary><strong>v0.5.8</strong> — dependency security fixes, end-user docs</summary>
+
+**Security.** `sharp` 0.35.3 → 0.35.5 (libheif / librsvg advisories). Lockfile
+refresh clears transitive advisories in `proxy-addr`, `ip-address`, `fast-uri`,
+`hono`, and `qs`. `npm audit --omit=dev` reports 0.
+
+**Docs.** [What Gate compresses](#what-gate-compresses),
+[reading `gate_session_stats`](#reading-gate-session-stats), and
+[pinning Node for SQLite](#pin-node-for-sqlite).
+
+**QA.** macOS `/var` vs `/private/var` canonical-path fixes in test scripts.
+No tool behavior changes.
+
+</details>
+
+<details>
 <summary><strong>v0.5.7</strong> — catalog mode, required SQLite, symbol HTML</summary>
 
 **Schema budget.** Default `GATE_TOOL_MODE=catalog` lists six core tools plus
